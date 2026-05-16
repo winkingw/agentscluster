@@ -17,6 +17,7 @@ from agents_cluster.core.config import (
     load_config,
     save_config,
 )
+from agents_cluster.core.doctor import run_doctor
 from agents_cluster.core.env import load_dotenv
 from agents_cluster.core.paths import (
     CONFIG_EXAMPLE_PATH,
@@ -27,6 +28,7 @@ from agents_cluster.core.paths import (
     WORKTREES_DIR,
 )
 from agents_cluster.orchestrator.controller import apply_run, run_task
+from agents_cluster.orchestrator.agent_test import test_agent
 
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -50,6 +52,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     init_cmd = sub.add_parser("init", help="Initialize database and check local tools.")
     init_cmd.set_defaults(func=cmd_init)
+
+    doctor_cmd = sub.add_parser("doctor", help="Check environment, tools, config, keys, and MCP.")
+    doctor_cmd.set_defaults(func=cmd_doctor)
 
     config_cmd = sub.add_parser("config", help="Configuration helpers.")
     config_sub = config_cmd.add_subparsers(dest="config_command", required=True)
@@ -75,7 +80,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--workers",
         help="Comma-separated worker agent names. Default: architect,coder,tester.",
     )
+    run_cmd.add_argument(
+        "--max-rework-rounds",
+        type=int,
+        help="Override automatic rework rounds when reviewer requests changes.",
+    )
     run_cmd.set_defaults(func=cmd_run)
+
+    test_agent_cmd = sub.add_parser("test-agent", help="Run or validate one configured agent.")
+    test_agent_cmd.add_argument("agent", help="Agent name, for example: master")
+    test_agent_cmd.add_argument("--cwd", help="Working directory for the test. Default: current directory.")
+    test_agent_cmd.add_argument("--prompt", help="Custom test prompt.")
+    test_agent_cmd.add_argument("--dry-run", action="store_true", help="Validate config without calling the model.")
+    test_agent_cmd.set_defaults(func=cmd_test_agent)
 
     chat_cmd = sub.add_parser("chat", help="Interactive task entry.")
     chat_cmd.set_defaults(func=cmd_chat)
@@ -115,6 +132,10 @@ def cmd_init(args: argparse.Namespace) -> None:
     print("Initialized.")
 
 
+def cmd_doctor(args: argparse.Namespace) -> None:
+    raise SystemExit(run_doctor())
+
+
 def cmd_config_open(args: argparse.Namespace) -> None:
     print(CONFIG_PATH)
     if os.name == "nt":
@@ -146,7 +167,20 @@ def cmd_run(args: argparse.Namespace) -> None:
     config = load_config()
     project = find_project(config, args.project)
     workers = [item.strip() for item in args.workers.split(",") if item.strip()] if args.workers else None
-    run_task(config, project, args.goal, yes=args.yes, workers=workers)
+    run_task(
+        config,
+        project,
+        args.goal,
+        yes=args.yes,
+        workers=workers,
+        max_rework_rounds=args.max_rework_rounds,
+    )
+
+
+def cmd_test_agent(args: argparse.Namespace) -> None:
+    config = load_config()
+    cwd = Path(args.cwd) if args.cwd else Path.cwd()
+    raise SystemExit(test_agent(config, args.agent, cwd=cwd, prompt=args.prompt, dry_run=args.dry_run))
 
 
 def cmd_chat(args: argparse.Namespace) -> None:

@@ -12,7 +12,7 @@ from agents_cluster.runners.factory import create_runner
 from agents_cluster.workspace import git_ops
 from agents_cluster.workspace.manager import prepare_worktree
 
-from .prompts import master_plan_prompt, master_summary_prompt, review_prompt, worker_prompt
+from .prompts import agent_capability_hint, master_plan_prompt, master_summary_prompt, review_prompt, worker_prompt
 
 
 DEFAULT_WORKERS = ["architect", "coder", "tester"]
@@ -24,6 +24,7 @@ def run_task(
     goal: str,
     yes: bool = False,
     workers: Optional[List[str]] = None,
+    max_rework_rounds: Optional[int] = None,
 ) -> Dict:
     db.init_db()
     run_id = f"run_{now_id()}_{uuid4().hex[:6]}"
@@ -45,15 +46,21 @@ def run_task(
     }
     db.insert_run(run_record)
 
-    project_path = Path(worktree_info["project_path"])
     worktree_path = Path(worktree_info["worktree_path"])
+    max_rework_rounds = _max_rework_rounds(config, max_rework_rounds)
 
     print(f"Run: {run_id}")
     print(f"Worktree: {worktree_path}")
     print(f"Branch: {worktree_info['branch_name']}")
 
     try:
-        plan = _run_agent(config, "master", master_plan_prompt(worktree_path, goal), worktree_path, outputs_dir)
+        plan = _run_agent(
+            config,
+            "master",
+            master_plan_prompt(worktree_path, goal, _capability_hint(config, "master")),
+            worktree_path,
+            outputs_dir,
+        )
         (run_dir / "plan.md").write_text(plan, encoding="utf-8")
         db.update_run(run_id, status="planned")
 
@@ -75,7 +82,14 @@ def run_task(
             output = _run_agent(
                 config,
                 worker_name,
-                worker_prompt(worker_name, worktree_path, goal, plan, previous_output),
+                worker_prompt(
+                    worker_name,
+                    worktree_path,
+                    goal,
+                    plan,
+                    previous_output,
+                    _capability_hint(config, worker_name),
+                ),
                 worktree_path,
                 outputs_dir,
             )
@@ -90,15 +104,69 @@ def run_task(
         (run_dir / "status.txt").write_text(status_text, encoding="utf-8")
         (run_dir / "diff.patch").write_text(diff_text, encoding="utf-8")
 
-        print("\nRunning reviewer.")
-        review = _run_agent(
-            config,
-            "reviewer",
-            review_prompt(worktree_path, goal, plan, _cap(diff_text), status_text),
-            worktree_path,
-            outputs_dir,
-        )
-        (run_dir / "review.md").write_text(review, encoding="utf-8")
+        review = ""
+        for review_round in range(max_rework_rounds + 1):
+            print("\nRunning reviewer.")
+            review = _run_agent(
+                config,
+                "reviewer",
+                review_prompt(
+                    worktree_path,
+                    goal,
+                    plan,
+                    _cap(diff_text),
+                    status_text,
+                    _capability_hint(config, "reviewer"),
+                ),
+                worktree_path,
+                outputs_dir / f"review_round_{review_round}",
+            )
+            review_name = "review.md" if review_round == 0 else f"review-round-{review_round}.md"
+            (run_dir / review_name).write_text(review, encoding="utf-8")
+
+            if not _review_requests_changes(review) or review_round >= max_rework_rounds:
+                break
+
+            print(f"\nReviewer requested changes; running rework round {review_round + 1}.")
+            rework_output = _run_agent(
+                config,
+                "coder",
+                worker_prompt(
+                    "coder",
+                    worktree_path,
+                    goal,
+                    plan,
+                    f"Reviewer requested changes:\n{review}",
+                    _capability_hint(config, "coder"),
+                ),
+                worktree_path,
+                outputs_dir / f"rework_round_{review_round + 1}",
+            )
+            worker_log_parts.append(f"## coder rework {review_round + 1}\n\n{rework_output}")
+
+            if "tester" in config.get("agents", {}):
+                tester_output = _run_agent(
+                    config,
+                    "tester",
+                    worker_prompt(
+                        "tester",
+                        worktree_path,
+                        goal,
+                        plan,
+                        f"Rework was applied after reviewer feedback:\n{review}",
+                        _capability_hint(config, "tester"),
+                    ),
+                    worktree_path,
+                    outputs_dir / f"rework_round_{review_round + 1}_tester",
+                )
+                worker_log_parts.append(f"## tester rework {review_round + 1}\n\n{tester_output}")
+
+            worker_log = "\n\n".join(worker_log_parts)
+            (run_dir / "worker-log.md").write_text(worker_log, encoding="utf-8")
+            status_text = git_ops.status(worktree_path)
+            diff_text = git_ops.diff(worktree_path)
+            (run_dir / "status.txt").write_text(status_text, encoding="utf-8")
+            (run_dir / "diff.patch").write_text(diff_text, encoding="utf-8")
 
         print("\nRunning master final summary.")
         summary = _run_agent(
@@ -112,6 +180,7 @@ def run_task(
                 review,
                 _cap(diff_text),
                 status_text,
+                _capability_hint(config, "master"),
             ),
             worktree_path,
             outputs_dir / "final",
@@ -150,6 +219,41 @@ def _run_agent(config: Dict, agent_name: str, prompt: str, cwd: Path, output_dir
             f"See {result.output_file}\n{result.stderr[-2000:]}"
         )
     return result.stdout.strip()
+
+
+def _capability_hint(config: Dict, agent_name: str) -> str:
+    try:
+        return agent_capability_hint(get_agent(config, agent_name))
+    except Exception:
+        return "Preferred skills/MCP: none configured."
+
+
+def _max_rework_rounds(config: Dict, override: Optional[int]) -> int:
+    if override is not None:
+        return max(0, override)
+    settings = config.get("settings", {}) or {}
+    try:
+        return max(0, int(settings.get("max_rework_rounds", 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _review_requests_changes(review: str) -> bool:
+    upper = review.upper()
+    if "REQUEST_CHANGES" in upper:
+        return True
+    if "DECISION: APPROVE" in upper or "\nAPPROVE" in upper:
+        return False
+    lowered = review.lower()
+    return any(
+        token in lowered
+        for token in (
+            "needs changes",
+            "request changes",
+            "\u4e0d\u901a\u8fc7",
+            "\u9700\u8981\u4fee\u6539",
+        )
+    )
 
 
 def _run_id_from_output_dir(output_dir: Path) -> str:

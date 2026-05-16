@@ -3,8 +3,31 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from agents_cluster.core.config import AgentConfig
 
-def master_plan_prompt(project_path: Path, goal: str) -> str:
+
+def agent_capability_hint(agent: AgentConfig) -> str:
+    skills = _as_list(agent.raw.get("preferred_skills"))
+    mcp = _as_list(agent.raw.get("preferred_mcp"))
+    lines = []
+    if skills:
+        lines.append("Preferred skills available to this agent: " + ", ".join(skills))
+    if mcp:
+        lines.append("Preferred MCP servers/tools for this agent: " + ", ".join(mcp))
+    if not lines:
+        return "Preferred skills/MCP: none configured."
+    return "\n".join(lines)
+
+
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    return [str(value)]
+
+
+def master_plan_prompt(project_path: Path, goal: str, capability_hint: str = "") -> str:
     return f"""You are the master orchestrator for agentsCluster.
 
 Project path:
@@ -12,6 +35,8 @@ Project path:
 
 User goal:
 {goal}
+
+{capability_hint}
 
 Create a concise implementation plan for worker agents.
 
@@ -23,7 +48,14 @@ Rules:
 """
 
 
-def worker_prompt(role: str, project_path: Path, goal: str, plan: str, previous_output: Optional[str] = None) -> str:
+def worker_prompt(
+    role: str,
+    project_path: Path,
+    goal: str,
+    plan: str,
+    previous_output: Optional[str] = None,
+    capability_hint: str = "",
+) -> str:
     prior = f"\nPrevious agent output:\n{previous_output}\n" if previous_output else ""
     return f"""You are the {role} worker in agentsCluster.
 
@@ -36,6 +68,8 @@ User goal:
 Master plan:
 {plan}
 {prior}
+{capability_hint}
+
 Instructions:
 - Work only inside the current repository/worktree.
 - Make focused changes that directly serve the goal.
@@ -45,7 +79,14 @@ Instructions:
 """
 
 
-def review_prompt(project_path: Path, goal: str, plan: str, diff_text: str, status_text: str) -> str:
+def review_prompt(
+    project_path: Path,
+    goal: str,
+    plan: str,
+    diff_text: str,
+    status_text: str,
+    capability_hint: str = "",
+) -> str:
     return f"""You are the reviewer agent in agentsCluster.
 
 Project path:
@@ -63,9 +104,14 @@ Git status:
 Git diff:
 {diff_text or "(no diff)"}
 
+{capability_hint}
+
 Review the work as a code reviewer.
 Prioritize correctness, regressions, missing tests, and risky assumptions.
-Return sections: Findings, Verification, Recommendation.
+Return sections: Decision, Findings, Verification, Recommendation.
+Decision must be exactly one of:
+- APPROVE
+- REQUEST_CHANGES
 """
 
 
@@ -77,6 +123,7 @@ def master_summary_prompt(
     review: str,
     diff_text: str,
     status_text: str,
+    capability_hint: str = "",
 ) -> str:
     return f"""You are the master orchestrator producing the final report for the user.
 
@@ -100,6 +147,8 @@ Git status:
 
 Git diff:
 {diff_text or "(no diff)"}
+
+{capability_hint}
 
 Return a concise Chinese final report with:
 - 完成了什么

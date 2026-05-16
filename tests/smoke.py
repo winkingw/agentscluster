@@ -7,6 +7,7 @@ from pathlib import Path
 
 from agents_cluster.core import db
 from agents_cluster.core.config import add_project, load_config, save_config
+from agents_cluster.core.paths import CONFIG_PATH
 from agents_cluster.workspace import git_ops
 from agents_cluster.workspace.manager import prepare_worktree
 
@@ -20,26 +21,35 @@ def run(cmd, cwd=None):
 
 def main() -> None:
     db.init_db()
+    original_config = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else None
     with tempfile.TemporaryDirectory() as tmp:
-        repo = Path(tmp) / "repo"
-        repo.mkdir()
-        run(["git", "init"], repo)
-        run(["git", "config", "user.email", "agentsCluster@example.local"], repo)
-        run(["git", "config", "user.name", "agentsCluster Smoke"], repo)
-        (repo / "README.md").write_text("# smoke\n", encoding="utf-8")
-        run(["git", "add", "README.md"], repo)
-        run(["git", "commit", "-m", "init"], repo)
+        try:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            run(["git", "init"], repo)
+            run(["git", "config", "user.email", "agentsCluster@example.local"], repo)
+            run(["git", "config", "user.name", "agentsCluster Smoke"], repo)
+            (repo / "README.md").write_text("# smoke\n", encoding="utf-8")
+            run(["git", "add", "README.md"], repo)
+            run(["git", "commit", "-m", "init"], repo)
 
-        config = load_config()
-        project = add_project(config, repo, "smoke")
-        save_config(config)
+            config = load_config()
+            project = add_project(config, repo, "smoke")
+            save_config(config)
 
-        info = prepare_worktree(project, "run_smoke")
-        worktree = Path(info["worktree_path"])
-        (worktree / "README.md").write_text("# smoke\n\nchanged\n", encoding="utf-8")
-        diff_text = git_ops.diff(worktree)
-        assert "changed" in diff_text
-        git_ops.remove_worktree(repo, worktree, force=True)
+            info = prepare_worktree(project, "run_smoke")
+            worktree = Path(info["worktree_path"])
+            (worktree / "README.md").write_text("# smoke\n\nchanged\n", encoding="utf-8")
+            diff_text = git_ops.diff(worktree)
+            assert "changed" in diff_text
+            git_ops.remove_worktree(repo, worktree, force=True)
+            try:
+                worktree.parent.rmdir()
+            except OSError:
+                pass
+        finally:
+            if original_config is not None:
+                CONFIG_PATH.write_text(original_config, encoding="utf-8")
 
     print("smoke ok")
 

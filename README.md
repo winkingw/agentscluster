@@ -29,12 +29,25 @@ pip install -e D:\programs\agentsCluster
 agentsCluster init
 ```
 
-不激活 conda 时，也可以用本地 Python 直接运行：
+如果 PowerShell 提示找不到 `agentsCluster`，可以先用下面任意一种方式运行诊断：
 
 ```powershell
-cd D:\programs\agentsCluster
-$env:PYTHONPATH="D:\programs\agentsCluster\src"
-python -m agents_cluster.cli init
+conda run -n agentsCluster agentsCluster doctor
+.\agentsCluster.ps1 doctor
+$env:PYTHONPATH="D:\programs\agentsCluster\src"; python -m agents_cluster.cli doctor
+```
+
+常见原因是当前 PowerShell 没把 conda 环境的 `Scripts` 目录加入 `PATH`。可执行：
+
+```powershell
+conda init powershell
+```
+
+然后重开 PowerShell，再运行：
+
+```powershell
+conda activate agentsCluster
+agentsCluster doctor
 ```
 
 ## 配置文件
@@ -79,13 +92,27 @@ D:\programs\agentsCluster\.env
 
 注意：`runner: codex` 和 `runner: claude` 是调用你本机安装的 CLI。它们能否直接使用某个第三方 API，取决于对应 CLI 自身支持。DeepSeek 这类 OpenAI-compatible API 最稳的路径是 `runner: direct_llm`。
 
+## 工具偏好
+
+每个 agent 可以配置工具偏好：
+
+```yaml
+preferred_skills: [bulletproof, github]
+preferred_mcp: [context-mode, letta]
+```
+
+这些字段会被注入到该 agent 的 prompt 中，提醒它优先考虑可用 skill/MCP。实际能否调用仍取决于 Codex/Claude CLI 当前是否已经加载对应 skill/MCP。
+
 ## 常用命令
 
 ```powershell
 agentsCluster init
+agentsCluster doctor
 agentsCluster config open
 agentsCluster project add D:\programs\your-project
 agentsCluster project list
+agentsCluster test-agent master --dry-run
+agentsCluster test-agent master
 agentsCluster chat
 agentsCluster run --project D:\programs\your-project --goal "实现某个功能"
 agentsCluster runs list
@@ -95,6 +122,27 @@ agentsCluster apply run_YYYYMMDD_HHMMSS_xxxxxx --mode diff
 agentsCluster apply run_YYYYMMDD_HHMMSS_xxxxxx --mode patch
 agentsCluster apply run_YYYYMMDD_HHMMSS_xxxxxx --mode merge
 agentsCluster apply run_YYYYMMDD_HHMMSS_xxxxxx --mode discard
+```
+
+`doctor` 会检查 Python、conda 环境、`agentsCluster` 命令入口、`git`、`codex`、`claude`、配置文件、`.env` key 是否存在，以及 `codex mcp list` 当前可见的 MCP。
+
+`test-agent <name>` 可以单独测试某个 agent，例如 `master`。默认会调用模型；如果只想验证配置和 runner，请加 `--dry-run`。
+
+## 自动返工
+
+审核 agent 返回 `REQUEST_CHANGES` 时，总控默认会自动回派 `coder` 返工一轮，并在返工后再次调用 `tester` 和 `reviewer`。
+
+默认轮数在 `settings.max_rework_rounds` 中配置：
+
+```yaml
+settings:
+  max_rework_rounds: 1
+```
+
+也可以在单次运行时覆盖：
+
+```powershell
+agentsCluster run --project D:\programs\your-project --goal "实现某个功能" --max-rework-rounds 2
 ```
 
 ## 真实任务前检查
