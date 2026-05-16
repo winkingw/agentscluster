@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agents-cluster"
+version = "0.1.0"
+description = "Local multi-agent orchestration over Codex CLI, Claude Code, and API workers."
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+agentsCluster = "agents_cluster.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,2 @@
+[console_scripts]
+agentsCluster = agents_cluster.cli:main

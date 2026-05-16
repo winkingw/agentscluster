@@ -1,0 +1,83 @@
+# agentsCluster 示例配置。
+# 这个文件可以提交到 GitHub；真实配置请放在 config/agents.yaml。
+
+settings:
+  cluster_root: D:\programs\agentsCluster
+  runs_dir: runs
+  worktrees_dir: worktrees
+  patches_dir: patches
+  default_timeout_seconds: 1800
+
+agents:
+  master:
+    runner: codex
+    model: gpt-5.5
+    role: orchestrator
+    timeout_seconds: 1800
+    env:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+    codex:
+      sandbox: workspace-write
+      approval_policy: never
+      model_reasoning_effort: xhigh
+
+  reviewer:
+    runner: codex
+    model: gpt-5.5
+    role: reviewer
+    timeout_seconds: 1800
+    env:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+    codex:
+      sandbox: workspace-write
+      approval_policy: never
+      model_reasoning_effort: xhigh
+
+  architect:
+    runner: claude
+    model: deepseek-v4-flash
+    role: architect
+    timeout_seconds: 1800
+    env:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
+    claude:
+      output_format: text
+
+  coder:
+    runner: claude
+    model: deepseek-v4-flash
+    role: coder
+    timeout_seconds: 1800
+    env:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
+    claude:
+      output_format: text
+
+  tester:
+    runner: claude
+    model: deepseek-v4-flash
+    role: tester
+    timeout_seconds: 1800
+    env:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
+    claude:
+      output_format: text
+
+  cheap_worker:
+    runner: direct_llm
+    provider: deepseek
+    model: deepseek-chat
+    role: assistant
+    timeout_seconds: 300
+    env:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+    direct_llm:
+      base_url: https://api.deepseek.com
+      api_key_env: DEEPSEEK_API_KEY
+
+projects: []

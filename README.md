@@ -1,0 +1,107 @@
+# agentsCluster
+
+`agentsCluster` 是一个本地多 agent 编程调度器。它用 Python 做总控 CLI，后台可以调用 Codex CLI、Claude Code 或直接调用 OpenAI-compatible API worker。
+
+第一版的设计目标是保守可控：
+
+- 每次任务都会创建独立 `git worktree`。
+- worker 执行期间不会直接修改原项目主工作区。
+- 总控会先规划、再分派 worker、再审核结果。
+- 完成后由你选择 `merge`、`diff`、`patch` 或 `discard`。
+- 真实配置和密钥默认不上传 GitHub。
+
+## 环境安装
+
+推荐使用独立 conda 环境：
+
+```powershell
+cd D:\programs\agentsCluster
+conda env create -f environment.yml
+conda activate agentsCluster
+agentsCluster init
+```
+
+如果环境已经存在：
+
+```powershell
+conda activate agentsCluster
+pip install -e D:\programs\agentsCluster
+agentsCluster init
+```
+
+不激活 conda 时，也可以用本地 Python 直接运行：
+
+```powershell
+cd D:\programs\agentsCluster
+$env:PYTHONPATH="D:\programs\agentsCluster\src"
+python -m agents_cluster.cli init
+```
+
+## 配置文件
+
+真实本地配置在：
+
+```text
+D:\programs\agentsCluster\config\agents.yaml
+```
+
+GitHub 模板配置在：
+
+```text
+D:\programs\agentsCluster\config\agents.example.yaml
+```
+
+密钥放在：
+
+```text
+D:\programs\agentsCluster\.env
+```
+
+`.env`、`config\agents.yaml`、数据库、运行日志、worktree、patch 和常见密钥文件都已加入 `.gitignore`。
+
+## API Key 数量
+
+不需要每个 agent 单独一个 key。通常只需要按 provider 配：
+
+- Codex/OpenAI：一个 `OPENAI_API_KEY`。
+- DeepSeek：一个 `DEEPSEEK_API_KEY`。
+
+多个 agent 可以共用同一个 provider key。比如 `architect`、`coder`、`tester` 都可以共用 `DEEPSEEK_API_KEY`。
+
+当前默认配置：
+
+- `master`：`codex`，模型 `gpt-5.5`，推理强度 `xhigh`。
+- `reviewer`：`codex`，模型 `gpt-5.5`，推理强度 `xhigh`。
+- `architect`：`claude`，模型 `deepseek-v4-flash`。
+- `coder`：`claude`，模型 `deepseek-v4-flash`。
+- `tester`：`claude`，模型 `deepseek-v4-flash`。
+- `cheap_worker`：`direct_llm`，模型 `deepseek-chat`。
+
+注意：`runner: codex` 和 `runner: claude` 是调用你本机安装的 CLI。它们能否直接使用某个第三方 API，取决于对应 CLI 自身支持。DeepSeek 这类 OpenAI-compatible API 最稳的路径是 `runner: direct_llm`。
+
+## 常用命令
+
+```powershell
+agentsCluster init
+agentsCluster config open
+agentsCluster project add D:\programs\your-project
+agentsCluster project list
+agentsCluster chat
+agentsCluster run --project D:\programs\your-project --goal "实现某个功能"
+agentsCluster runs list
+agentsCluster runs show run_YYYYMMDD_HHMMSS_xxxxxx
+agentsCluster apply run_YYYYMMDD_HHMMSS_xxxxxx
+agentsCluster apply run_YYYYMMDD_HHMMSS_xxxxxx --mode diff
+agentsCluster apply run_YYYYMMDD_HHMMSS_xxxxxx --mode patch
+agentsCluster apply run_YYYYMMDD_HHMMSS_xxxxxx --mode merge
+agentsCluster apply run_YYYYMMDD_HHMMSS_xxxxxx --mode discard
+```
+
+## 真实任务前检查
+
+运行真实任务前建议确认：
+
+- `codex` 和 `claude` 已经登录，或已经配置为可非交互运行。
+- 目标项目是 git 仓库。
+- 目标项目主工作区没有关键未提交改动。
+- `.env` 中的 key 可用，并且没有被提交到 GitHub。
