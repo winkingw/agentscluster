@@ -16,6 +16,7 @@ config/*.local.yaml
 agentsCluster.db
 __pycache__/
 *.pyc
+*.egg-info/
 runs/*
 !runs/.gitkeep
 worktrees/*
