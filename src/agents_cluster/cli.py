@@ -15,6 +15,7 @@ from agents_cluster.core.config import (
     find_project,
     list_projects,
     load_config,
+    remove_project,
     save_config,
 )
 from agents_cluster.core.doctor import run_doctor
@@ -29,6 +30,7 @@ from agents_cluster.core.paths import (
 )
 from agents_cluster.orchestrator.controller import apply_run, run_task
 from agents_cluster.orchestrator.agent_test import test_agent
+from agents_cluster.api.server import serve
 
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -56,6 +58,11 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_cmd = sub.add_parser("doctor", help="Check environment, tools, config, keys, and MCP.")
     doctor_cmd.set_defaults(func=cmd_doctor)
 
+    serve_cmd = sub.add_parser("serve", help="Start the local JSON API server for frontend use.")
+    serve_cmd.add_argument("--host", default="127.0.0.1")
+    serve_cmd.add_argument("--port", type=int, default=8765)
+    serve_cmd.set_defaults(func=cmd_serve)
+
     config_cmd = sub.add_parser("config", help="Configuration helpers.")
     config_sub = config_cmd.add_subparsers(dest="config_command", required=True)
     config_open = config_sub.add_parser("open", help="Open the agents.yaml path.")
@@ -69,6 +76,9 @@ def build_parser() -> argparse.ArgumentParser:
     project_add.add_argument("path")
     project_add.add_argument("--name")
     project_add.set_defaults(func=cmd_project_add)
+    project_remove = project_sub.add_parser("remove", help="Remove a registered project without deleting files.")
+    project_remove.add_argument("selector", help="Project name or path.")
+    project_remove.set_defaults(func=cmd_project_remove)
     project_list = project_sub.add_parser("list", help="List registered projects.")
     project_list.set_defaults(func=cmd_project_list)
 
@@ -136,6 +146,10 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     raise SystemExit(run_doctor())
 
 
+def cmd_serve(args: argparse.Namespace) -> None:
+    serve(host=args.host, port=args.port)
+
+
 def cmd_config_open(args: argparse.Namespace) -> None:
     print(CONFIG_PATH)
     if os.name == "nt":
@@ -151,6 +165,13 @@ def cmd_project_add(args: argparse.Namespace) -> None:
     project = add_project(config, Path(args.path), args.name)
     save_config(config)
     print(f"Added project: {project['name']} -> {project['path']}")
+
+
+def cmd_project_remove(args: argparse.Namespace) -> None:
+    config = load_config()
+    project = remove_project(config, args.selector)
+    save_config(config)
+    print(f"Removed project registration: {project.get('name')} -> {project.get('path')}")
 
 
 def cmd_project_list(args: argparse.Namespace) -> None:

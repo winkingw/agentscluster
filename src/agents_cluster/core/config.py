@@ -100,5 +100,23 @@ def add_project(data: Dict[str, Any], project_path: Path, name: Optional[str] = 
     return project
 
 
+def remove_project(data: Dict[str, Any], selector: str) -> Dict[str, Any]:
+    projects = list_projects(data)
+    if not projects:
+        raise KeyError("No projects registered")
+
+    selector_path = str(Path(selector).resolve()).lower()
+    for index, project in enumerate(projects):
+        name = str(project.get("name", ""))
+        raw_path = str(project.get("path", ""))
+        normalized_path = str(Path(raw_path).resolve()).lower() if raw_path else ""
+        if selector == name or selector_path == normalized_path:
+            removed = projects.pop(index)
+            data["projects"] = projects
+            return removed
+
+    raise KeyError(f"Project not found: {selector}")
+
+
 def command_exists(name: str) -> bool:
     return shutil.which(name) is not None

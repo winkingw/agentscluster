@@ -108,9 +108,11 @@ preferred_mcp: [context-mode, letta]
 ```powershell
 agentsCluster init
 agentsCluster doctor
+agentsCluster serve --host 127.0.0.1 --port 8765
 agentsCluster config open
 agentsCluster project add D:\programs\your-project
 agentsCluster project list
+agentsCluster project remove D:\programs\your-project
 agentsCluster test-agent master --dry-run
 agentsCluster test-agent master
 agentsCluster chat
@@ -127,6 +129,8 @@ agentsCluster apply run_YYYYMMDD_HHMMSS_xxxxxx --mode discard
 `doctor` 会检查 Python、conda 环境、`agentsCluster` 命令入口、`git`、`codex`、`claude`、配置文件、`.env` key 是否存在，以及 `codex mcp list` 当前可见的 MCP。
 
 `test-agent <name>` 可以单独测试某个 agent，例如 `master`。默认会调用模型；如果只想验证配置和 runner，请加 `--dry-run`。
+
+`serve` 会启动本地 HTTP JSON API，后续前端可以直接请求。接口文档见 `docs\api.md`。
 
 ## 自动返工
 

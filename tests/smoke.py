@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 from agents_cluster.core import db
-from agents_cluster.core.config import add_project, load_config, save_config
+from agents_cluster.core.config import add_project, load_config, remove_project, save_config
 from agents_cluster.core.paths import CONFIG_PATH
 from agents_cluster.workspace import git_ops
 from agents_cluster.workspace.manager import prepare_worktree
@@ -32,6 +32,15 @@ def main() -> None:
             (repo / "README.md").write_text("# smoke\n", encoding="utf-8")
             run(["git", "add", "README.md"], repo)
             run(["git", "commit", "-m", "init"], repo)
+
+            config = load_config()
+            project = add_project(config, repo, "smoke")
+            save_config(config)
+
+            config = load_config()
+            removed = remove_project(config, "smoke")
+            assert removed["name"] == "smoke"
+            save_config(config)
 
             config = load_config()
             project = add_project(config, repo, "smoke")
