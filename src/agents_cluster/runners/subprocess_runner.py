@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -23,8 +24,9 @@ class SubprocessAgentRunner(AgentRunner):
         if env_overrides:
             env.update(env_overrides)
 
+        resolved_command = _resolve_command(command)
         proc = subprocess.run(
-            command,
+            resolved_command,
             input=prompt,
             cwd=str(cwd),
             env=env,
@@ -41,7 +43,7 @@ class SubprocessAgentRunner(AgentRunner):
             "\n".join(
                 [
                     f"# Agent: {self.config.name}",
-                    f"# Command: {' '.join(command)}",
+                    f"# Command: {' '.join(resolved_command)}",
                     f"# CWD: {cwd}",
                     f"# Return code: {proc.returncode}",
                     "",
@@ -57,10 +59,19 @@ class SubprocessAgentRunner(AgentRunner):
 
         return RunnerResult(
             agent=self.config.name,
-            command=command,
+            command=resolved_command,
             cwd=cwd,
             returncode=proc.returncode,
             stdout=proc.stdout,
             stderr=proc.stderr,
             output_file=output_file,
         )
+
+
+def _resolve_command(command: List[str]) -> List[str]:
+    if not command:
+        return command
+    executable = shutil.which(command[0])
+    if not executable:
+        return command
+    return [executable, *command[1:]]

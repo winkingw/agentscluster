@@ -121,11 +121,12 @@ def _agent_env_names(raw: Dict) -> List[str]:
 
 
 def _mcp_checks() -> List[Check]:
-    if not shutil.which("codex"):
+    codex = shutil.which("codex")
+    if not codex:
         return [Check("codex mcp", False, "codex not found")]
     try:
         proc = subprocess.run(
-            ["codex", "mcp", "list"],
+            [codex, "mcp", "list"],
             text=True,
             encoding="utf-8",
             errors="replace",
