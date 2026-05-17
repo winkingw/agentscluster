@@ -8,6 +8,10 @@ settings:
   patches_dir: patches
   default_timeout_seconds: 1800
   max_rework_rounds: 1
+  # 当前默认仍使用 agentsCluster 内置顺序流程。
+  # 后续可切换为 langgraph 或 openai_agents；未实现完全替换前会自动回退 builtin。
+  orchestrator: builtin
+  integration_strategy: adapter
 
 agents:
   master:
@@ -90,5 +94,29 @@ agents:
     direct_llm:
       base_url: https://api.deepseek.com
       api_key_env: DEEPSEEK_API_KEY
+
+  aider_coder:
+    runner: aider
+    model: deepseek/deepseek-chat
+    role: coder
+    timeout_seconds: 1800
+    enabled: false
+    env:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+    aider:
+      extra_args: []
+
+  openhands_coder:
+    runner: openhands
+    model: deepseek-v4-flash
+    role: coder
+    timeout_seconds: 1800
+    enabled: false
+    env:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+    openhands:
+      command: openhands
+      workspace_arg: true
+      extra_args: []
 
 projects: []

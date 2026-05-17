@@ -20,6 +20,7 @@ from agents_cluster.core.config import (
 )
 from agents_cluster.core.doctor import run_doctor
 from agents_cluster.core.env import load_dotenv
+from agents_cluster.core.integrations import list_integrations, run_spike
 from agents_cluster.core.paths import (
     CONFIG_EXAMPLE_PATH,
     CONFIG_PATH,
@@ -57,6 +58,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_cmd = sub.add_parser("doctor", help="Check environment, tools, config, keys, and MCP.")
     doctor_cmd.set_defaults(func=cmd_doctor)
+
+    integrations_cmd = sub.add_parser("integrations", help="Inspect optional orchestration/worker integrations.")
+    integrations_sub = integrations_cmd.add_subparsers(dest="integrations_command", required=True)
+    integrations_list = integrations_sub.add_parser("list", help="List optional integrations.")
+    integrations_list.set_defaults(func=cmd_integrations_list)
+    integrations_spike = integrations_sub.add_parser("spike", help="Run a local no-model spike for one integration.")
+    integrations_spike.add_argument("name", choices=["langgraph", "openai-agents", "openhands"])
+    integrations_spike.add_argument("--goal", default="验证 agentsCluster 可插拔集成")
+    integrations_spike.set_defaults(func=cmd_integrations_spike)
 
     serve_cmd = sub.add_parser("serve", help="Start the local JSON API server for frontend use.")
     serve_cmd.add_argument("--host", default="127.0.0.1")
@@ -144,6 +154,21 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 def cmd_doctor(args: argparse.Namespace) -> None:
     raise SystemExit(run_doctor())
+
+
+def cmd_integrations_list(args: argparse.Namespace) -> None:
+    print("Optional integrations:")
+    for status in list_integrations():
+        marker = "installed" if status.installed else "missing"
+        print(f"- {status.name}: {marker}")
+        print(f"  detail: {status.detail}")
+        print(f"  use: {status.use_for}")
+        if not status.installed:
+            print(f"  install: {status.install_hint}")
+
+
+def cmd_integrations_spike(args: argparse.Namespace) -> None:
+    print(run_spike(args.name, args.goal))
 
 
 def cmd_serve(args: argparse.Namespace) -> None:

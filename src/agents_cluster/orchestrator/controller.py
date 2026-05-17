@@ -13,6 +13,7 @@ from agents_cluster.workspace import git_ops
 from agents_cluster.workspace.manager import prepare_worktree
 
 from .prompts import agent_capability_hint, master_plan_prompt, master_summary_prompt, review_prompt, worker_prompt
+from .task_protocol import build_task_plan, write_agent_result, write_task_plan
 
 
 DEFAULT_WORKERS = ["architect", "coder", "tester"]
@@ -54,6 +55,10 @@ def run_task(
     print(f"Branch: {worktree_info['branch_name']}")
 
     try:
+        orchestrator = _orchestrator_name(config)
+        if orchestrator != "builtin":
+            print(f"Configured orchestrator '{orchestrator}' is not active yet; using builtin flow.")
+
         plan = _run_agent(
             config,
             "master",
@@ -62,7 +67,10 @@ def run_task(
             outputs_dir,
         )
         (run_dir / "plan.md").write_text(plan, encoding="utf-8")
-        db.update_run(run_id, status="planned")
+        worker_names = workers or DEFAULT_WORKERS
+        task_plan = build_task_plan(goal, plan, worker_names)
+        write_task_plan(run_dir / "task-plan.json", task_plan)
+        db.update_run(run_id, status="planned", metadata={**run_record["metadata"], "orchestrator": orchestrator})
 
         print("\nMaster plan saved.")
         if not yes:
@@ -74,11 +82,12 @@ def run_task(
                 return {"id": run_id, "status": "paused", "run_dir": str(run_dir)}
 
         db.update_run(run_id, status="running")
-        worker_names = workers or DEFAULT_WORKERS
         worker_log_parts: List[str] = []
         previous_output = ""
-        for worker_name in worker_names:
+        for index, worker_name in enumerate(worker_names):
+            task_id = task_plan["tasks"][index]["id"] if index < len(task_plan["tasks"]) else ""
             print(f"\nRunning worker: {worker_name}")
+            db.add_event(run_id, now_iso(), worker_name, "task_started", f"started {task_id}", {"task_id": task_id})
             output = _run_agent(
                 config,
                 worker_name,
@@ -93,6 +102,8 @@ def run_task(
                 worktree_path,
                 outputs_dir,
             )
+            write_agent_result(outputs_dir, worker_name, output, "completed", task_id=task_id)
+            db.add_event(run_id, now_iso(), worker_name, "task_completed", f"completed {task_id}", {"task_id": task_id})
             worker_log_parts.append(f"## {worker_name}\n\n{output}")
             previous_output = output[-6000:]
 
@@ -123,6 +134,12 @@ def run_task(
             )
             review_name = "review.md" if review_round == 0 else f"review-round-{review_round}.md"
             (run_dir / review_name).write_text(review, encoding="utf-8")
+            write_agent_result(
+                outputs_dir / f"review_round_{review_round}",
+                "reviewer",
+                review,
+                "request_changes" if _review_requests_changes(review) else "approved",
+            )
 
             if not _review_requests_changes(review) or review_round >= max_rework_rounds:
                 break
@@ -142,6 +159,13 @@ def run_task(
                 worktree_path,
                 outputs_dir / f"rework_round_{review_round + 1}",
             )
+            write_agent_result(
+                outputs_dir / f"rework_round_{review_round + 1}",
+                "coder",
+                rework_output,
+                "completed",
+                task_id=f"rework_{review_round + 1}",
+            )
             worker_log_parts.append(f"## coder rework {review_round + 1}\n\n{rework_output}")
 
             if "tester" in config.get("agents", {}):
@@ -158,6 +182,13 @@ def run_task(
                     ),
                     worktree_path,
                     outputs_dir / f"rework_round_{review_round + 1}_tester",
+                )
+                write_agent_result(
+                    outputs_dir / f"rework_round_{review_round + 1}_tester",
+                    "tester",
+                    tester_output,
+                    "completed",
+                    task_id=f"rework_{review_round + 1}_tester",
                 )
                 worker_log_parts.append(f"## tester rework {review_round + 1}\n\n{tester_output}")
 
@@ -186,6 +217,7 @@ def run_task(
             outputs_dir / "final",
         )
         (run_dir / "summary.md").write_text(summary, encoding="utf-8")
+        write_agent_result(outputs_dir / "final", "master", summary, "completed")
         db.update_run(run_id, status="reviewed", summary=summary)
     except Exception as exc:
         (run_dir / "failure.txt").write_text(str(exc), encoding="utf-8")
@@ -236,6 +268,12 @@ def _max_rework_rounds(config: Dict, override: Optional[int]) -> int:
         return max(0, int(settings.get("max_rework_rounds", 1)))
     except (TypeError, ValueError):
         return 1
+
+
+def _orchestrator_name(config: Dict) -> str:
+    settings = config.get("settings", {}) or {}
+    orchestrator = settings.get("orchestrator", "builtin")
+    return str(orchestrator).strip().lower() or "builtin"
 
 
 def _review_requests_changes(review: str) -> bool:

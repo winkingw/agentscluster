@@ -7,9 +7,11 @@ from typing import Dict, Optional
 from agents_cluster.core.config import AgentConfig
 
 from .base import AgentRunner
+from .aider import AiderRunner
 from .claude import ClaudeRunner
 from .codex import CodexRunner
 from .direct_llm import DirectLLMRunner
+from .openhands import OpenHandsRunner
 
 
 def create_runner(config: AgentConfig, env: Optional[Dict[str, str]] = None) -> AgentRunner:
@@ -24,6 +26,10 @@ def create_runner(config: AgentConfig, env: Optional[Dict[str, str]] = None) -> 
         return ClaudeRunner(config, resolved_env)
     if runner in ("direct_llm", "llm", "api"):
         return DirectLLMRunner(config, resolved_env)
+    if runner == "aider":
+        return AiderRunner(config, resolved_env)
+    if runner in ("openhands", "openhands_sdk", "openhands-sdk"):
+        return OpenHandsRunner(config, resolved_env)
     raise ValueError(f"Unsupported runner for agent {config.name}: {config.runner}")
 
 

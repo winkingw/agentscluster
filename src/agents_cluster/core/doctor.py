@@ -9,6 +9,7 @@ from typing import Dict, List
 
 from .config import get_agent, load_config
 from .env import load_dotenv
+from .integrations import list_integrations
 from .paths import CLUSTER_ROOT, CONFIG_EXAMPLE_PATH, CONFIG_PATH, ENV_PATH
 
 
@@ -26,6 +27,7 @@ def run_doctor() -> int:
     checks.extend(_path_checks())
     checks.extend(_tool_checks())
     checks.extend(_config_checks())
+    checks.extend(_integration_checks())
     checks.extend(_mcp_checks())
 
     print("agentsCluster doctor")
@@ -143,6 +145,19 @@ def _mcp_checks() -> List[Check]:
     names = _mcp_names(proc.stdout)
     detail = ", ".join(names) if names else "no MCP servers listed"
     return [Check("codex mcp", True, detail)]
+
+
+def _integration_checks() -> List[Check]:
+    checks = []
+    for status in list_integrations():
+        checks.append(
+            Check(
+                f"optional {status.name}",
+                True,
+                "installed: " + status.detail if status.installed else "missing: " + status.install_hint,
+            )
+        )
+    return checks
 
 
 def _mcp_names(output: str) -> List[str]:
