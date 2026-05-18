@@ -126,9 +126,13 @@ def _mcp_checks() -> List[Check]:
     codex = shutil.which("codex")
     if not codex:
         return [Check("codex mcp", False, "codex not found")]
+    if os.name == "nt" and codex.lower().endswith((".cmd", ".bat")):
+        command = ["cmd.exe", "/c", codex, "mcp", "list"]
+    else:
+        command = [codex, "mcp", "list"]
     try:
         proc = subprocess.run(
-            [codex, "mcp", "list"],
+            command,
             text=True,
             encoding="utf-8",
             errors="replace",

@@ -311,13 +311,6 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         except KeyError as exc:
             self._send_error(HTTPStatus.NOT_FOUND, str(exc))
             return
-        active_conflicts = _project_active_conflicts(project, exclude_run_id=None)
-        if active_conflicts:
-            self._send_error(
-                HTTPStatus.CONFLICT,
-                f"Project already has active run(s): {', '.join(run['id'] for run in active_conflicts[:5])}",
-            )
-            return
 
         workers = body.get("workers")
         if workers is not None and not isinstance(workers, list):
@@ -337,8 +330,13 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
                 workers=worker_names,
                 max_rework_rounds=max_rework_rounds,
             )
+            _mark_run_queued(run["id"], "plan", clear_summary=False)
+            try:
+                db.add_event(run["id"], now_iso(), "system", "queue_enqueued", "enqueued: plan")
+            except Exception:
+                pass
             RUN_QUEUE.submit_plan(run["id"])
-            self._send_json({"run_id": run["id"], "status": "planning"}, HTTPStatus.ACCEPTED)
+            self._send_json({"run_id": run["id"], "status": "queued", "phase": "plan"}, HTTPStatus.ACCEPTED)
         except Exception as exc:
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
@@ -357,16 +355,14 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         if run["status"] not in {"waiting_approval", "planned", "paused"}:
             self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} is not waiting for approval")
             return
-        active_conflicts = _project_active_conflicts(_project_selector_from_run(run), exclude_run_id=run_id)
-        if active_conflicts:
-            self._send_error(
-                HTTPStatus.CONFLICT,
-                f"Project already has active run(s): {', '.join(item['id'] for item in active_conflicts[:5])}",
-            )
-            return
         try:
+            _mark_run_queued(run_id, "execute", clear_summary=False)
+            try:
+                db.add_event(run_id, now_iso(), "system", "queue_enqueued", "enqueued: execute")
+            except Exception:
+                pass
             RUN_QUEUE.submit_execute(run_id)
-            self._send_json({"run_id": run_id, "status": "running"}, HTTPStatus.ACCEPTED)
+            self._send_json({"run_id": run_id, "status": "queued", "phase": "execute"}, HTTPStatus.ACCEPTED)
         except Exception as exc:
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
@@ -389,22 +385,16 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         if run.get("status") in {"merged", "discarded"}:
             self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} is already finalized: {run.get('status')}")
             return
-        active_conflicts = _project_active_conflicts(_project_selector_from_run(run), exclude_run_id=run_id)
-        if active_conflicts:
-            self._send_error(
-                HTTPStatus.CONFLICT,
-                f"Project already has active run(s): {', '.join(item['id'] for item in active_conflicts[:5])}",
-            )
-            return
         try:
-            db.update_run(run_id, status="queued", summary=None)
+            _mark_run_queued(run_id, "plan", clear_summary=True)
             db.add_event(run_id, now_iso(), "system", "retry_plan_requested", "retry plan requested")
+            db.add_event(run_id, now_iso(), "system", "queue_enqueued", "enqueued: plan")
         except Exception:
             # fallback: do not fail retry on event write issues
             pass
         try:
             RUN_QUEUE.submit_plan(run_id)
-            self._send_json({"run_id": run_id, "status": "planning"}, HTTPStatus.ACCEPTED)
+            self._send_json({"run_id": run_id, "status": "queued", "phase": "plan"}, HTTPStatus.ACCEPTED)
         except Exception as exc:
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
@@ -433,21 +423,15 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         if not worktree_path.exists():
             self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} worktree not found: {worktree_path}")
             return
-        active_conflicts = _project_active_conflicts(_project_selector_from_run(run), exclude_run_id=run_id)
-        if active_conflicts:
-            self._send_error(
-                HTTPStatus.CONFLICT,
-                f"Project already has active run(s): {', '.join(item['id'] for item in active_conflicts[:5])}",
-            )
-            return
         try:
-            db.update_run(run_id, status="queued")
+            _mark_run_queued(run_id, "execute", clear_summary=False)
             db.add_event(run_id, now_iso(), "system", "retry_execute_requested", "retry execute requested")
+            db.add_event(run_id, now_iso(), "system", "queue_enqueued", "enqueued: execute")
         except Exception:
             pass
         try:
             RUN_QUEUE.submit_execute(run_id)
-            self._send_json({"run_id": run_id, "status": "running"}, HTTPStatus.ACCEPTED)
+            self._send_json({"run_id": run_id, "status": "queued", "phase": "execute"}, HTTPStatus.ACCEPTED)
         except Exception as exc:
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
@@ -466,13 +450,6 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         if run.get("status") in {"merged", "discarded"}:
             self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} is already finalized: {run.get('status')}")
             return
-        active_conflicts = _project_active_conflicts(_project_selector_from_run(run), exclude_run_id=run_id)
-        if active_conflicts:
-            self._send_error(
-                HTTPStatus.CONFLICT,
-                f"Project already has active run(s): {', '.join(item['id'] for item in active_conflicts[:5])}",
-            )
-            return
 
         run_dir = RUNS_DIR / run_id
         summary_path = run_dir / "summary.md"
@@ -488,26 +465,28 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
 
         if plan_path.exists() and task_plan_path.exists():
             try:
-                db.update_run(run_id, status="queued")
+                _mark_run_queued(run_id, "execute", clear_summary=False)
                 db.add_event(run_id, now_iso(), "system", "resume_requested", "resume requested: execute")
+                db.add_event(run_id, now_iso(), "system", "queue_enqueued", "enqueued: execute")
             except Exception:
                 pass
             try:
                 RUN_QUEUE.submit_execute(run_id)
-                self._send_json({"run_id": run_id, "status": "running", "mode": "execute"}, HTTPStatus.ACCEPTED)
+                self._send_json({"run_id": run_id, "status": "queued", "phase": "execute", "mode": "execute"}, HTTPStatus.ACCEPTED)
                 return
             except Exception as exc:
                 self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
                 return
 
         try:
-            db.update_run(run_id, status="queued", summary=None)
+            _mark_run_queued(run_id, "plan", clear_summary=True)
             db.add_event(run_id, now_iso(), "system", "resume_requested", "resume requested: plan")
+            db.add_event(run_id, now_iso(), "system", "queue_enqueued", "enqueued: plan")
         except Exception:
             pass
         try:
             RUN_QUEUE.submit_plan(run_id)
-            self._send_json({"run_id": run_id, "status": "planning", "mode": "plan"}, HTTPStatus.ACCEPTED)
+            self._send_json({"run_id": run_id, "status": "queued", "phase": "plan", "mode": "plan"}, HTTPStatus.ACCEPTED)
         except Exception as exc:
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
@@ -728,6 +707,20 @@ def _project_active_conflicts(project: Dict[str, Any], exclude_run_id: Optional[
             continue
         result.append(run)
     return result
+
+
+def _mark_run_queued(run_id: str, pending_phase: str, *, clear_summary: bool) -> None:
+    run = db.get_run(run_id)
+    if not run:
+        return
+    metadata = run.get("metadata", {}) or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata["pending_phase"] = pending_phase
+    fields: Dict[str, Any] = {"status": "queued", "metadata": metadata}
+    if clear_summary:
+        fields["summary"] = None
+    db.update_run(run_id, **fields)
 
 
 def _agent_summaries(config: Dict[str, Any]) -> list:

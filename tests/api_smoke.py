@@ -106,6 +106,9 @@ def main() -> None:
             if agent_name == "master":
                 if "final report" in prompt or "final summary" in prompt:
                     return "summary ok"
+                # Make the first async planning slow so we can assert project-level queueing deterministically.
+                if "exercise async flow" in prompt:
+                    time.sleep(1.0)
                 return "plan ok"
             if agent_name == "reviewer":
                 return "Decision\nAPPROVE\n\nVerification\nok"
@@ -193,7 +196,8 @@ def main() -> None:
                 method="POST",
                 payload={"confirm": True},
             )
-            assert resumed_recovery["status"] == "planning"
+            assert resumed_recovery["status"] == "queued"
+            assert resumed_recovery["phase"] == "plan"
             resumed_recovery_detail = wait_for_status(base_url, interrupted_recovery_id, "waiting_approval")
             assert any(event["kind"] == "resume_requested" for event in resumed_recovery_detail["events"])
             db.update_run(interrupted_recovery_id, status="discarded")
@@ -273,25 +277,37 @@ def main() -> None:
                 if worktree.exists():
                     git_ops.remove_worktree(repo, worktree, force=True)
 
-            created_run = request_json(
+            created_code, created_run = request_error(
                 f"{base_url}/api/runs",
                 method="POST",
                 payload={"project": "api-smoke", "goal": "exercise async flow"},
             )
+            assert created_code == 202, created_run
             async_run_id = created_run["run_id"]
-            assert created_run["status"] == "planning"
+            assert created_run["status"] == "queued"
+            assert created_run["phase"] == "plan"
+
+            queued_code, queued_run = request_error(
+                f"{base_url}/api/runs",
+                method="POST",
+                payload={"project": "api-smoke", "goal": "should queue"},
+            )
+            assert queued_code == 202, queued_run
+            queued_plan_run_id = queued_run["run_id"]
+            assert queued_run["status"] == "queued"
+            assert queued_run["phase"] == "plan"
+
+            time.sleep(0.2)
+            queued_detail_early = request_json(f"{base_url}/api/runs/{queued_plan_run_id}")
+            assert queued_detail_early["run"]["status"] == "queued"
 
             waiting = wait_for_status(base_url, async_run_id, "waiting_approval")
             assert waiting["run"]["goal"] == "exercise async flow"
             assert any(event["kind"] == "planning_completed" for event in waiting["events"])
 
-            conflict_code, conflict_body = request_error(
-                f"{base_url}/api/runs",
-                method="POST",
-                payload={"project": "api-smoke", "goal": "should conflict"},
-            )
-            assert conflict_code == 409
-            assert "active run" in conflict_body["error"]
+            queued_waiting = wait_for_status(base_url, queued_plan_run_id, "waiting_approval")
+            assert queued_waiting["run"]["goal"] == "should queue"
+            assert any(event["kind"] == "planning_completed" for event in queued_waiting["events"])
 
             apply_conflict_code, apply_conflict_body = request_error(
                 f"{base_url}/api/runs/{async_run_id}/apply",
@@ -332,7 +348,8 @@ def main() -> None:
                 method="POST",
                 payload={"confirm": True},
             )
-            assert approved["status"] == "running"
+            assert approved["status"] == "queued"
+            assert approved["phase"] == "execute"
 
             reviewed = wait_for_status(base_url, async_run_id, "reviewed")
             assert reviewed["run"]["summary"] == "summary ok"
@@ -344,7 +361,8 @@ def main() -> None:
                 method="POST",
                 payload={"confirm": True},
             )
-            assert retry_exec["status"] == "running"
+            assert retry_exec["status"] == "queued"
+            assert retry_exec["phase"] == "execute"
             reviewed_again = wait_for_status(base_url, async_run_id, "reviewed")
             assert reviewed_again["run"]["summary"] == "summary ok"
             assert any(event["kind"] == "retry_execute_requested" for event in reviewed_again["events"])
@@ -370,12 +388,16 @@ def main() -> None:
                 method="POST",
                 payload={"confirm": True},
             )
-            assert retry_plan["status"] == "planning"
+            assert retry_plan["status"] == "queued"
+            assert retry_plan["phase"] == "plan"
             retried_plan_detail = wait_for_status(base_url, cancel_run_id, "waiting_approval")
             assert any(event["kind"] == "retry_plan_requested" for event in retried_plan_detail["events"])
 
-            for queued_run_id in (async_run_id, cancel_run_id):
-                detail = request_json(f"{base_url}/api/runs/{queued_run_id}")
+            # Ensure the second queued run eventually reaches waiting_approval after the first planning completed.
+            wait_for_status(base_url, queued_plan_run_id, "waiting_approval")
+
+            for cleanup_run_id in (async_run_id, cancel_run_id, queued_plan_run_id):
+                detail = request_json(f"{base_url}/api/runs/{cleanup_run_id}")
                 queued_worktree = Path(detail["run"]["worktree_path"])
                 if queued_worktree.exists():
                     git_ops.remove_worktree(repo, queued_worktree, force=True)

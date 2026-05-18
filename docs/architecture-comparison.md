@@ -1,55 +1,111 @@
 # agentsCluster 开源底座审查
 
-本文记录 agentsCluster 后续扩展时可复用的开源项目，以及它们与最初目标的匹配程度。
+本文总结了前期讨论过的几个开源或半开源方案，并说明为什么 `agentsCluster` 当前采用“本地总控壳 + 可替换底层 runner / orchestrator”的路线。
 
-## 最初目标
+## 初始目标回顾
 
-- 用户和总控 agent 交流编程想法。
-- 总控拆分任务、分派 worker、检查 worker 成果。
-- worker 可以使用不同模型/API，并且后续可在配置中切换。
-- 每次项目运行时选择目标项目目录。
-- 使用 git worktree 隔离修改。
-- 总控汇总“做了什么、有什么问题、如何处理”，再让用户确认 diff/patch/merge/discard。
-- 后续有前端，前端通过稳定 API 查询项目、任务、运行状态和结果。
+目标不是单纯跑一个 agent，而是做一套可控的本地多 agent 集群：
 
-## 候选项目结论
+- 用户和总控 agent 直接交流
+- 总控负责拆任务、派 worker、汇总结果、审核质量
+- 不同 agent 可以绑定不同模型 / API
+- 每次任务能明确工作目录
+- 使用 `git worktree` 隔离修改
+- 最终由用户确认 `diff / patch / merge / discard`
+- 后续能挂前端，直接查询项目、run、事件和产物
 
-| 项目 | 适配点 | 局限 | agentsCluster 用法 |
-| --- | --- | --- | --- |
-| LangGraph | 动态任务图、状态机、human-in-the-loop、长期任务恢复 | 引入新调度模型，需要把当前 controller 拆成节点 | 作为 `orchestrator: langgraph` 的候选实现 |
-| OpenAI Agents SDK | handoff、MCP、tracing、guardrails、sessions | 更偏 agent 协议层，不直接解决 git/worktree/apply | 作为 agent 协议层，替代手写 prompt/runner 协议 |
-| OpenHands / Software Agent SDK | 成熟编码 agent、REST/API、Docker 工作区、GUI | 依赖较重，Windows/Docker/模型兼容需要验证 | 作为 `runner: openhands` worker 接入 |
-| SWE-agent | issue/bugfix 型自动修复，patch 工作流成熟 | 不适合作总控，也不适合通用交互式任务 | 作为专项 worker 候选 |
-| aider | 轻量、成熟、适合单仓库代码修改 | 多 agent 调度和审核要由 agentsCluster 负责 | 作为 `runner: aider` coder worker |
-| Codex CLI | 高质量代码总控/审核，已在本机配置 | CLI 子进程是否继承 Desktop 当前技能/MCP 取决于 Codex CLI 配置 | 继续作为 master/reviewer 默认 runner |
-| Claude Code | 适合 worker，支持 MCP/skills | 产品/API 依赖，不是完全免费本地开源底座 | 继续作为 worker 默认 runner |
-| CrewAI | 角色型 multi-agent 流程简单 | 对 git worktree、diff、merge、代码审核没有原生优势 | 暂不作为主路线 |
-| GitHub Copilot coding agent / Agent HQ | 产品形态值得参考 | 不是免费开源，本地可控性弱 | 只参考交互和异步任务体验 |
+## 方案对比
 
-## 推荐路线
+| 方案 | 适合做什么 | 优点 | 局限 | 在 agentsCluster 中的定位 |
+| --- | --- | --- | --- | --- |
+| LangGraph | 编排多阶段流程、状态机、人工确认 | 适合做复杂 orchestration | 需要重写当前 controller 逻辑 | 作为可插拔 orchestrator |
+| OpenAI Agents SDK | handoff、tool/MCP、session、tracing | 协议层成熟，适合多 agent 协作 | 不负责 git/worktree/apply 边界 | 作为 agent 协议层候选 |
+| OpenHands | 编码 agent、容器 / Docker 工作区 | 对真实编码任务比较强 | 依赖较重，Windows/Docker 兼容要单独验证 | 作为重型 worker 候选 |
+| aider | 单仓库代码修改 worker | 轻量、成熟、适合 coder 角色 | 不适合做总控和完整编排 | 作为 `coder` 类 worker 候选 |
+| SWE-agent | issue / bugfix 型自动修复 | 对缺陷修复工作流成熟 | 不适合通用多 agent 主控 | 作为专项 worker 候选 |
+| CrewAI | 角色式多 agent 组织 | 上手快 | 对 git/worktree/人工确认这类工程边界不够强 | 不作为主路线 |
+| Codex CLI | 高质量代码主控 / 审核 | 适合作 master / reviewer | 是否继承本机 skills / MCP 取决于 CLI 配置 | 当前默认总控 |
+| Claude Code | worker 执行、工具调用 | 适合作 architect / coder / tester | 同样受 CLI 配置和 provider 约束 | 当前默认 worker |
 
-保留 agentsCluster 作为本地总控壳：
+## 当前路线为什么成立
 
-- 配置、密钥、项目注册、doctor、运行记录由 agentsCluster 管。
-- git worktree、diff、patch、merge/discard 的安全边界由 agentsCluster 管。
-- 总控/worker/reviewer 的底层实现逐步适配 LangGraph、OpenAI Agents SDK、OpenHands、aider 等。
+核心思路是：
 
-这样做的好处是不会把项目绑死到单一框架上，也不会破坏当前已经可用的 Codex/Claude CLI 流程。
+- `agentsCluster` 自己负责工程边界和运行记录
+- `Codex / Claude / direct_llm / 未来的 OpenHands / aider` 只负责执行 agent 本身
 
-## 当前已落地
+这样拆分有几个好处：
 
-- `settings.orchestrator: builtin` 配置位。
-- `agentsCluster integrations list` 检查可选框架是否安装。
-- `agentsCluster integrations spike langgraph` 做 LangGraph 本地无模型验证。
-- `agentsCluster integrations spike openai-agents` 做 OpenAI Agents SDK 本地无模型验证。
-- `agentsCluster integrations spike openhands` 做 OpenHands SDK 本地无模型验证。
-- 新增 `runner: aider` 和 `runner: openhands` 的适配入口。
-- 当前 builtin 流程会写出 `runs/<run_id>/task-plan.json` 和 `agent_outputs/*.result.json`，给后续前端和状态图调度复用。
+1. 不把整个系统绑死在某一个框架上  
+2. `git worktree`、事件流、人工确认、API 接口这些关键边界由我们自己掌控  
+3. 以后切换模型、CLI、MCP、skills 或底层编排框架时，不需要推翻整个系统  
 
-## 下一步实现顺序
+## 当前结论
 
-1. 用 LangGraph 复刻当前 builtin 流程，输出同样的 run/event/task/result 文件。
-2. 给 OpenAI Agents SDK 增加真实 runner，优先验证 MCP、handoff 和 tracing。
-3. 验证 OpenHands SDK 在 agentsCluster worktree 内完成一个小任务，确认模型配置和 Windows/Docker 兼容性。
-4. 扩展 HTTP API：启动任务、确认计划、取消任务、查看事件、查看 diff、apply。
-5. 前端接 API，做项目选择、任务输入、agent 时间线、日志和 diff 查看。
+最适合你的不是“直接用某一个现成框架替代全部系统”，而是：
+
+- 保留 `agentsCluster` 作为本地总控壳
+- 默认用 `Codex CLI` 做 `master / reviewer`
+- 默认用 `Claude Code` 做 `architect / coder / tester`
+- 按需接入 `LangGraph`、`OpenAI Agents SDK`、`OpenHands`、`aider`
+
+这比直接押注某一个单一框架稳得多，也更符合你一开始的要求：可切模型、可控工作区、可审核、可恢复、可接前端。
+
+## 已落地部分
+
+当前仓库已经具备这些能力：
+
+- 项目注册与删除注册
+- `doctor` 环境检查
+- `test-agent` 单 agent 检测
+- 主控规划 / worker 执行 / reviewer 审核 / summary 汇总
+- 自动返工
+- `resume / retry-plan / retry-execute`
+- 项目级串行队列
+- HTTP API 与 SSE
+- `diff / patch / merge / discard`
+
+## 建议的后续扩展顺序
+
+### 1. LangGraph 编排替换 builtin controller
+
+目标：
+
+- 复用当前 run/event/artifact 协议
+- 把当前线性流程表达成图
+- 为后面更复杂的 worker 协作、分支重试、人工节点做准备
+
+### 2. OpenAI Agents SDK 接入总控链路
+
+目标：
+
+- 用更标准的 handoff / tool / tracing 协议替换部分手写 prompt 协议
+- 继续保留 `agentsCluster` 的 worktree / apply / queue / API 外壳
+
+### 3. OpenHands / aider 作为可选 worker
+
+目标：
+
+- 把 `coder` 角色做成可切换 runner
+- 在复杂编码任务上比较 `claude`、`aider`、`openhands` 的效果和成本
+
+### 4. 前端
+
+有了当前稳定 HTTP API 后，前端可以直接实现：
+
+- 项目选择
+- 新建 run
+- 事件时间线
+- 计划预览
+- 产物查看
+- diff / merge / discard 确认
+
+## 最终建议
+
+继续沿着下面的架构演进：
+
+- `agentsCluster` 负责工程控制面
+- `Codex / Claude / direct_llm / OpenHands / aider` 负责执行面
+- `LangGraph / OpenAI Agents SDK` 负责未来的编排增强
+
+这条路线最符合你要的“像 cc cli / codex cli 那样交流，但背后是多 agent 协作”的目标。
