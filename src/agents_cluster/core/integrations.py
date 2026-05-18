@@ -110,14 +110,13 @@ def _run_langgraph_spike(goal: str) -> str:
     if not _module_exists("langgraph"):
         raise RuntimeError("LangGraph is not installed. Run: pip install -U langgraph")
 
-    from typing import List as TypingList
     from typing import TypedDict
 
     from langgraph.graph import END, START, StateGraph
 
     class SpikeState(TypedDict):
         goal: str
-        steps: TypingList[str]
+        steps: list[str]
         status: str
 
     def plan_node(state: SpikeState) -> Dict[str, object]:

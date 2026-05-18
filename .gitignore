@@ -23,3 +23,11 @@ worktrees/*
 !worktrees/.gitkeep
 patches/*
 !patches/.gitkeep
+vendor/cache/
+vendor/logs/
+vendor/repos/
+!vendor/.gitkeep
+!vendor/requirements-optional.txt
+!vendor/README.md
+!scripts/
+!scripts/install_optional_deps.ps1

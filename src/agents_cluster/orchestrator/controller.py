@@ -14,6 +14,7 @@ from agents_cluster.workspace.manager import prepare_worktree
 
 from .prompts import agent_capability_hint, master_plan_prompt, master_summary_prompt, review_prompt, worker_prompt
 from .task_protocol import build_task_plan, write_agent_result, write_task_plan
+from .langgraph_controller import plan_with_langgraph
 
 
 DEFAULT_WORKERS = ["architect", "coder", "tester"]
@@ -56,19 +57,35 @@ def run_task(
 
     try:
         orchestrator = _orchestrator_name(config)
-        if orchestrator != "builtin":
-            print(f"Configured orchestrator '{orchestrator}' is not active yet; using builtin flow.")
-
-        plan = _run_agent(
-            config,
-            "master",
-            master_plan_prompt(worktree_path, goal, _capability_hint(config, "master")),
-            worktree_path,
-            outputs_dir,
-        )
-        (run_dir / "plan.md").write_text(plan, encoding="utf-8")
         worker_names = workers or DEFAULT_WORKERS
-        task_plan = build_task_plan(goal, plan, worker_names)
+        if orchestrator == "langgraph":
+            print("Planning with LangGraph orchestrator.")
+
+            def plan_agent(plan_goal: str, plan_worktree: Path) -> str:
+                return _run_agent(
+                    config,
+                    "master",
+                    master_plan_prompt(plan_worktree, plan_goal, _capability_hint(config, "master")),
+                    plan_worktree,
+                    outputs_dir,
+                )
+
+            planning_state = plan_with_langgraph(goal, worktree_path, worker_names, plan_agent)
+            plan = str(planning_state["plan"])
+            task_plan = planning_state["task_plan"]
+        else:
+            if orchestrator != "builtin":
+                print(f"Configured orchestrator '{orchestrator}' is not active yet; using builtin flow.")
+            plan = _run_agent(
+                config,
+                "master",
+                master_plan_prompt(worktree_path, goal, _capability_hint(config, "master")),
+                worktree_path,
+                outputs_dir,
+            )
+            task_plan = build_task_plan(goal, plan, worker_names)
+
+        (run_dir / "plan.md").write_text(plan, encoding="utf-8")
         write_task_plan(run_dir / "task-plan.json", task_plan)
         db.update_run(run_id, status="planned", metadata={**run_record["metadata"], "orchestrator": orchestrator})
 

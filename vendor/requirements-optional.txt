@@ -1,0 +1,10 @@
+# agentsCluster 可选开源底座依赖。
+# 安装位置：独立 conda 环境 agentsCluster。
+# 安装脚本：scripts/install_optional_deps.ps1。
+
+langgraph
+openai-agents
+
+# aider-chat 依赖较重，当前在本机 Windows/conda 下安装会长时间无输出，
+# 并且可能临时影响 openai 包版本。后续单独验证后再打开。
+# aider-chat
