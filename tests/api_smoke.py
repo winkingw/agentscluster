@@ -249,6 +249,19 @@ def main() -> None:
             assert waiting["run"]["goal"] == "exercise async flow"
             assert any(event["kind"] == "planning_completed" for event in waiting["events"])
 
+            artifacts = request_json(f"{base_url}/api/runs/{async_run_id}/artifacts")
+            artifact_names = {item["name"] for item in artifacts["artifacts"]}
+            assert "plan.md" in artifact_names
+            assert "task-plan.json" in artifact_names
+
+            plan_art = request_json(f"{base_url}/api/runs/{async_run_id}/artifacts/plan.md")
+            assert plan_art["type"] == "text"
+            assert "plan ok" in plan_art["text"]
+
+            task_plan_art = request_json(f"{base_url}/api/runs/{async_run_id}/artifacts/task-plan.json")
+            assert task_plan_art["type"] == "json"
+            assert "tasks" in task_plan_art["data"]
+
             existing_events = request_json(f"{base_url}/api/runs/{async_run_id}/events")
             last_event_id = existing_events["events"][-1]["id"]
             stream_result, stream_thread = read_sse_until(
@@ -273,6 +286,17 @@ def main() -> None:
             assert reviewed["run"]["summary"] == "summary ok"
             assert any(event["kind"] == "execution_completed" for event in reviewed["events"])
 
+            db.update_run(async_run_id, status="interrupted", summary="manual interruption for retry test")
+            retry_exec = request_json(
+                f"{base_url}/api/runs/{async_run_id}/retry-execute",
+                method="POST",
+                payload={"confirm": True},
+            )
+            assert retry_exec["status"] == "running"
+            reviewed_again = wait_for_status(base_url, async_run_id, "reviewed")
+            assert reviewed_again["run"]["summary"] == "summary ok"
+            assert any(event["kind"] == "retry_execute_requested" for event in reviewed_again["events"])
+
             cancel_run = request_json(
                 f"{base_url}/api/runs",
                 method="POST",
@@ -288,6 +312,15 @@ def main() -> None:
             assert cancelled["status"] == "cancelled"
             cancelled_detail = wait_for_status(base_url, cancel_run_id, "cancelled")
             assert any(event["kind"] == "run_cancelled" for event in cancelled_detail["events"])
+
+            retry_plan = request_json(
+                f"{base_url}/api/runs/{cancel_run_id}/retry-plan",
+                method="POST",
+                payload={"confirm": True},
+            )
+            assert retry_plan["status"] == "planning"
+            retried_plan_detail = wait_for_status(base_url, cancel_run_id, "waiting_approval")
+            assert any(event["kind"] == "retry_plan_requested" for event in retried_plan_detail["events"])
 
             for queued_run_id in (async_run_id, cancel_run_id):
                 detail = request_json(f"{base_url}/api/runs/{queued_run_id}")

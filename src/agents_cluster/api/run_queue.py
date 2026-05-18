@@ -98,8 +98,9 @@ class RunQueue:
             if future and not future.done():
                 raise RuntimeError(f"Run {run_id} already has an active background task")
             event = self._cancel_events.setdefault(run_id, threading.Event())
-            if phase == "execute":
-                event.clear()
+            # A new submission starts a new phase; clear any old cancellation signal.
+            # If the user cancels again, request_cancel() will set it.
+            event.clear()
             future = self._executor.submit(self._run_phase, run_id, phase, event)
             self._futures[run_id] = future
 

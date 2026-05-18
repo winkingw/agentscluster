@@ -13,7 +13,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from agents_cluster.core import db
 from agents_cluster.core.config import add_project, find_project, get_agent, list_projects, load_config, remove_project, save_config
-from agents_cluster.core.paths import PATCHES_DIR
+from agents_cluster.core.paths import PATCHES_DIR, RUNS_DIR
+from agents_cluster.core.time import now_iso
 from agents_cluster.orchestrator.agent_test import test_agent
 from agents_cluster.orchestrator.controller import create_run
 from agents_cluster.workspace import git_ops
@@ -21,6 +22,7 @@ from .run_queue import RUN_QUEUE
 
 
 TERMINAL_RUN_STATUSES = {"reviewed", "failed", "cancelled", "merged", "discarded", "interrupted"}
+RUN_ARTIFACT_MAX_BYTES = 2_000_000
 
 
 class AgentsClusterHTTPServer(ThreadingHTTPServer):
@@ -102,6 +104,13 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
                 limit = _int_query(query, "limit", 500, minimum=1, maximum=2000)
                 self._send_json({"run_id": run_id, "events": db.list_events(run_id, after_id=after_id, limit=limit)})
                 return
+            if action == "artifacts":
+                self._handle_artifacts_list(run_id)
+                return
+            if action.startswith("artifacts/"):
+                rel = action.removeprefix("artifacts/").strip("/")
+                self._handle_artifact_get(run_id, rel)
+                return
             if action == "diff":
                 self._send_json({"run_id": run_id, "diff": git_ops.diff(Path(run["worktree_path"]))})
                 return
@@ -141,6 +150,20 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
                 self._send_error(HTTPStatus.NOT_FOUND, f"Unknown run action: {action}")
                 return
             self._handle_approve_plan(run_id)
+            return
+        if route.startswith("/api/runs/") and route.endswith("/retry-plan"):
+            run_id, action = _run_route(route)
+            if action != "retry-plan":
+                self._send_error(HTTPStatus.NOT_FOUND, f"Unknown run action: {action}")
+                return
+            self._handle_retry_plan(run_id)
+            return
+        if route.startswith("/api/runs/") and route.endswith("/retry-execute"):
+            run_id, action = _run_route(route)
+            if action != "retry-execute":
+                self._send_error(HTTPStatus.NOT_FOUND, f"Unknown run action: {action}")
+                return
+            self._handle_retry_execute(run_id)
             return
         if route.startswith("/api/runs/") and route.endswith("/cancel"):
             run_id, action = _run_route(route)
@@ -325,6 +348,73 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
+    def _handle_retry_plan(self, run_id: str) -> None:
+        try:
+            body = self._read_json()
+        except ValueError:
+            return
+        if body.get("confirm") is not True:
+            self._send_error(HTTPStatus.BAD_REQUEST, "retry-plan requires confirm=true")
+            return
+        run = db.get_run(run_id)
+        if not run:
+            self._send_error(HTTPStatus.NOT_FOUND, f"Run not found: {run_id}")
+            return
+        worktree_path = Path(str(run.get("worktree_path") or ""))
+        if not worktree_path.exists():
+            self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} worktree not found: {worktree_path}")
+            return
+        if run.get("status") in {"merged", "discarded"}:
+            self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} is already finalized: {run.get('status')}")
+            return
+        try:
+            db.update_run(run_id, status="queued", summary=None)
+            db.add_event(run_id, now_iso(), "system", "retry_plan_requested", "retry plan requested")
+        except Exception:
+            # fallback: do not fail retry on event write issues
+            pass
+        try:
+            RUN_QUEUE.submit_plan(run_id)
+            self._send_json({"run_id": run_id, "status": "planning"}, HTTPStatus.ACCEPTED)
+        except Exception as exc:
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+
+    def _handle_retry_execute(self, run_id: str) -> None:
+        try:
+            body = self._read_json()
+        except ValueError:
+            return
+        if body.get("confirm") is not True:
+            self._send_error(HTTPStatus.BAD_REQUEST, "retry-execute requires confirm=true")
+            return
+        run = db.get_run(run_id)
+        if not run:
+            self._send_error(HTTPStatus.NOT_FOUND, f"Run not found: {run_id}")
+            return
+        if run.get("status") in {"merged", "discarded"}:
+            self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} is already finalized: {run.get('status')}")
+            return
+        run_dir = RUNS_DIR / run_id
+        plan_path = run_dir / "plan.md"
+        task_plan_path = run_dir / "task-plan.json"
+        if not plan_path.exists() or not task_plan_path.exists():
+            self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} is missing plan artifacts; retry-plan first")
+            return
+        worktree_path = Path(str(run.get("worktree_path") or ""))
+        if not worktree_path.exists():
+            self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} worktree not found: {worktree_path}")
+            return
+        try:
+            db.update_run(run_id, status="queued")
+            db.add_event(run_id, now_iso(), "system", "retry_execute_requested", "retry execute requested")
+        except Exception:
+            pass
+        try:
+            RUN_QUEUE.submit_execute(run_id)
+            self._send_json({"run_id": run_id, "status": "running"}, HTTPStatus.ACCEPTED)
+        except Exception as exc:
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+
     def _handle_cancel_run(self, run_id: str) -> None:
         try:
             body = self._read_json()
@@ -343,6 +433,56 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
             self._send_json({"run_id": run_id, "status": updated["status"]})
         except Exception as exc:
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+
+    def _handle_artifacts_list(self, run_id: str) -> None:
+        run_dir = RUNS_DIR / run_id
+        if not run_dir.exists():
+            self._send_error(HTTPStatus.NOT_FOUND, f"Run directory not found: {run_dir}")
+            return
+        items = []
+        for path in sorted(run_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(run_dir).as_posix()
+            # Keep the list reasonable; large raw logs can still be fetched explicitly.
+            size = path.stat().st_size
+            items.append({"name": rel, "bytes": int(size)})
+        self._send_json({"run_id": run_id, "artifacts": items})
+
+    def _handle_artifact_get(self, run_id: str, rel: str) -> None:
+        if not rel or rel.startswith(("/", "\\")) or ".." in rel.replace("\\", "/").split("/"):
+            self._send_error(HTTPStatus.BAD_REQUEST, "Invalid artifact path")
+            return
+        run_dir = RUNS_DIR / run_id
+        if not run_dir.exists():
+            self._send_error(HTTPStatus.NOT_FOUND, f"Run directory not found: {run_dir}")
+            return
+        target = (run_dir / rel).resolve()
+        try:
+            run_root = run_dir.resolve()
+        except Exception:
+            run_root = run_dir
+        if run_root not in target.parents and target != run_root:
+            self._send_error(HTTPStatus.BAD_REQUEST, "Artifact path escapes run directory")
+            return
+        if not target.exists() or not target.is_file():
+            self._send_error(HTTPStatus.NOT_FOUND, f"Artifact not found: {rel}")
+            return
+        size = target.stat().st_size
+        if size > RUN_ARTIFACT_MAX_BYTES:
+            self._send_error(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, f"Artifact too large: {size} bytes")
+            return
+        # For JSON, return parsed form so the frontend doesn't need to re-parse.
+        if target.suffix.lower() == ".json":
+            try:
+                data = json.loads(target.read_text(encoding="utf-8"))
+            except Exception as exc:
+                self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"Invalid JSON artifact: {exc}")
+                return
+            self._send_json({"run_id": run_id, "name": rel, "type": "json", "data": data})
+            return
+        text = target.read_text(encoding="utf-8", errors="replace")
+        self._send_json({"run_id": run_id, "name": rel, "type": "text", "text": text})
 
     def _handle_apply(self, run_id: str) -> None:
         try:

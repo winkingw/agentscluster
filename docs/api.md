@@ -104,6 +104,7 @@ http://127.0.0.1:8765
 常见状态值（不是严格枚举，前端以实际返回为准）：
 
 - `planning`：规划中（后台执行）。
+- `queued`：已进入后台队列，等待 planning 或 execute 开始。
 - `waiting_approval`：规划完成，等待用户确认是否执行。
 - `running`：执行中（后台执行）。
 - `reviewed`：完成并产出最终 summary。
@@ -120,6 +121,7 @@ http://127.0.0.1:8765
 - `planning_started` / `planning_completed`
 - `queue_started` / `queue_completed` / `queue_failed`
 - `execution_completed`
+- `retry_plan_requested` / `retry_execute_requested`
 - `run_recovered` / `run_interrupted`
 - `cancel_requested` / `run_cancelled`
 - `run_failed`
@@ -293,9 +295,89 @@ SSE 事件类型：
 - `run-event`
 - `done`
 
+### GET /api/runs/{run_id}/artifacts
+
+列出当前 run 目录下可直接给前端读取的产物文件，例如：
+
+- `plan.md`
+- `task-plan.json`
+- `worker-log.md`
+- `review.md`
+- `summary.md`
+- `status.txt`
+- `diff.patch`
+- `agent_outputs/...`
+
+返回示例：
+
+```json
+{
+  "run_id": "run_20260518_120000_abcdef",
+  "artifacts": [
+    {
+      "name": "plan.md",
+      "bytes": 1234
+    }
+  ]
+}
+```
+
+### GET /api/runs/{run_id}/artifacts/{path}
+
+读取单个产物内容。
+
+- `.json` 文件会返回 `type=json` 和已解析的 `data`
+- 其它文本文件返回 `type=text` 和 `text`
+
+例如：
+
+```text
+GET /api/runs/{run_id}/artifacts/plan.md
+GET /api/runs/{run_id}/artifacts/task-plan.json
+GET /api/runs/{run_id}/artifacts/agent_outputs/final/master.result.json
+```
+
 ### POST /api/runs/{run_id}/approve-plan
 
 用户确认计划并开始执行（异步）。必须传：
+
+```json
+{
+  "confirm": true
+}
+```
+
+返回：
+
+```json
+{
+  "run_id": "run_20260518_120000_abcdef",
+  "status": "running"
+}
+```
+
+### POST /api/runs/{run_id}/retry-plan
+
+对已有 run 重新执行 planning。适合 `cancelled`、`failed`、`interrupted` 等状态下继续使用同一个 worktree 重做计划。
+
+```json
+{
+  "confirm": true
+}
+```
+
+返回：
+
+```json
+{
+  "run_id": "run_20260518_120000_abcdef",
+  "status": "planning"
+}
+```
+
+### POST /api/runs/{run_id}/retry-execute
+
+对已有 run 基于现有 `plan.md + task-plan.json` 重新执行 worker / reviewer / final summary。适合 `interrupted` 或执行失败后继续跑。
 
 ```json
 {
