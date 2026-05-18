@@ -7,10 +7,14 @@ import threading
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from uuid import uuid4
 
 from agents_cluster.api.server import AgentsClusterHandler
 from agents_cluster.core import db
 from agents_cluster.core.paths import CONFIG_PATH
+from agents_cluster.core.time import now_iso
+from agents_cluster.workspace import git_ops
+from agents_cluster.workspace.manager import prepare_worktree
 
 
 def run(cmd, cwd=None):
@@ -62,6 +66,69 @@ def main() -> None:
 
             projects = request_json(f"{base_url}/api/projects")
             assert any(project["name"] == "api-smoke" for project in projects["projects"])
+
+            agents = request_json(f"{base_url}/api/agents")
+            assert any(agent["name"] == "master" for agent in agents["agents"])
+
+            master = request_json(f"{base_url}/api/agents/master")
+            assert master["agent"]["runner"]
+            assert "OPENAI_API_KEY" in master["agent"]["env_keys"]
+            assert "sk-" not in json.dumps(master)
+
+            test = request_json(
+                f"{base_url}/api/agents/master/test",
+                method="POST",
+                payload={"dry_run": True, "cwd": str(repo)},
+            )
+            assert test["returncode"] == 0
+            assert "Dry run only" in test["stdout"]
+
+            run_id = f"run_api_smoke_{uuid4().hex[:6]}"
+            info = prepare_worktree(created["project"], run_id)
+            worktree = Path(info["worktree_path"])
+            try:
+                (worktree / "README.md").write_text("# api smoke\n\nchanged\n", encoding="utf-8")
+                db.insert_run(
+                    {
+                        "id": run_id,
+                        "created_at": now_iso(),
+                        "project_name": info["project_name"],
+                        "project_path": info["project_path"],
+                        "worktree_path": info["worktree_path"],
+                        "branch_name": info["branch_name"],
+                        "goal": "api smoke",
+                        "status": "reviewed",
+                        "metadata": {"base_branch": info["base_branch"]},
+                    }
+                )
+                db.add_event(run_id, now_iso(), "tester", "smoke", "event ok")
+
+                run_detail = request_json(f"{base_url}/api/runs/{run_id}")
+                assert run_detail["run"]["id"] == run_id
+                assert run_detail["events"][0]["kind"] == "smoke"
+
+                events = request_json(f"{base_url}/api/runs/{run_id}/events")
+                assert events["events"][0]["message"] == "event ok"
+
+                diff = request_json(f"{base_url}/api/runs/{run_id}/diff")
+                assert "changed" in diff["diff"]
+
+                apply_diff = request_json(
+                    f"{base_url}/api/runs/{run_id}/apply",
+                    method="POST",
+                    payload={"mode": "diff"},
+                )
+                assert "changed" in apply_diff["diff"]
+
+                patch = request_json(
+                    f"{base_url}/api/runs/{run_id}/apply",
+                    method="POST",
+                    payload={"mode": "patch"},
+                )
+                assert patch["patch_path"].endswith(f"{run_id}.patch")
+            finally:
+                if worktree.exists():
+                    git_ops.remove_worktree(repo, worktree, force=True)
 
             removed = request_json(f"{base_url}/api/projects/api-smoke", method="DELETE")
             assert removed["removed"]["name"] == "api-smoke"
