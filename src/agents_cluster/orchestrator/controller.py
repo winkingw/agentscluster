@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 from uuid import uuid4
 
 from agents_cluster.core import db
@@ -20,11 +21,14 @@ from .langgraph_controller import plan_with_langgraph
 DEFAULT_WORKERS = ["architect", "coder", "tester"]
 
 
-def run_task(
+class RunCancelled(RuntimeError):
+    pass
+
+
+def create_run(
     config: Dict,
     project: Dict[str, str],
     goal: str,
-    yes: bool = False,
     workers: Optional[List[str]] = None,
     max_rework_rounds: Optional[int] = None,
 ) -> Dict:
@@ -44,24 +48,85 @@ def run_task(
         "branch_name": worktree_info["branch_name"],
         "goal": goal,
         "status": "planning",
-        "metadata": {"base_branch": worktree_info["base_branch"]},
+        "metadata": {
+            "base_branch": worktree_info["base_branch"],
+            "workers": workers or DEFAULT_WORKERS,
+            "max_rework_rounds": _max_rework_rounds(config, max_rework_rounds),
+            "orchestrator": _orchestrator_name(config),
+        },
     }
     db.insert_run(run_record)
+    db.add_event(run_id, now_iso(), "system", "run_created", "run created", run_record["metadata"])
+    return run_record
 
-    worktree_path = Path(worktree_info["worktree_path"])
-    max_rework_rounds = _max_rework_rounds(config, max_rework_rounds)
+
+def run_task(
+    config: Dict,
+    project: Dict[str, str],
+    goal: str,
+    yes: bool = False,
+    workers: Optional[List[str]] = None,
+    max_rework_rounds: Optional[int] = None,
+) -> Dict:
+    run_record = create_run(
+        config,
+        project,
+        goal,
+        workers=workers,
+        max_rework_rounds=max_rework_rounds,
+    )
+    run_id = run_record["id"]
+    worktree_path = Path(run_record["worktree_path"])
 
     print(f"Run: {run_id}")
     print(f"Worktree: {worktree_path}")
-    print(f"Branch: {worktree_info['branch_name']}")
+    print(f"Branch: {run_record['branch_name']}")
 
     try:
-        orchestrator = _orchestrator_name(config)
-        worker_names = workers or DEFAULT_WORKERS
-        if orchestrator == "langgraph":
-            print("Planning with LangGraph orchestrator.")
+        planning = plan_run(config, run_id)
+        plan = planning["plan"]
 
+        print("\nMaster plan saved.")
+        if not yes:
+            print("\n--- Plan preview ---")
+            print(_preview(plan, 2500))
+            answer = input("\nStart worker execution? [y/N] ").strip().lower()
+            if answer not in ("y", "yes"):
+                return {"id": run_id, "status": "waiting_approval", "run_dir": str(_run_dir(run_id))}
+
+        result = execute_run(config, run_id)
+    except Exception:
+        print(f"Run directory: {_run_dir(run_id)}")
+        raise
+
+    print("\n--- Final summary ---")
+    print(_preview(result["summary"], 5000))
+    print(f"\nNext: agentsCluster apply {run_id}")
+
+    return {"id": run_id, "status": "reviewed", "run_dir": str(_run_dir(run_id))}
+
+
+def plan_run(
+    config: Dict,
+    run_id: str,
+    cancel_check: Optional[Callable[[], bool]] = None,
+) -> Dict:
+    run = _require_run(run_id)
+    run_dir = _run_dir(run_id)
+    outputs_dir = _outputs_dir(run_id)
+    worktree_path = Path(run["worktree_path"])
+    goal = str(run["goal"])
+    metadata = run.get("metadata", {}) or {}
+    worker_names = _worker_names(metadata)
+    orchestrator = str(metadata.get("orchestrator") or _orchestrator_name(config))
+
+    try:
+        _ensure_not_cancelled(run_id, cancel_check)
+        db.update_run(run_id, status="planning")
+        db.add_event(run_id, now_iso(), "system", "planning_started", "planning started")
+        if orchestrator == "langgraph":
             def plan_agent(plan_goal: str, plan_worktree: Path) -> str:
+                _ensure_not_cancelled(run_id, cancel_check)
                 return _run_agent(
                     config,
                     "master",
@@ -87,21 +152,47 @@ def run_task(
 
         (run_dir / "plan.md").write_text(plan, encoding="utf-8")
         write_task_plan(run_dir / "task-plan.json", task_plan)
-        db.update_run(run_id, status="planned", metadata={**run_record["metadata"], "orchestrator": orchestrator})
+        db.update_run(run_id, status="waiting_approval")
+        db.add_event(run_id, now_iso(), "master", "planning_completed", "plan ready for approval")
+        return {"id": run_id, "status": "waiting_approval", "plan": plan, "task_plan": task_plan}
+    except RunCancelled as exc:
+        _mark_cancelled(run_id, str(exc))
+        raise
+    except Exception as exc:
+        _write_failure(run_id, exc)
+        raise
 
-        print("\nMaster plan saved.")
-        if not yes:
-            print("\n--- Plan preview ---")
-            print(_preview(plan, 2500))
-            answer = input("\nStart worker execution? [y/N] ").strip().lower()
-            if answer not in ("y", "yes"):
-                db.update_run(run_id, status="paused")
-                return {"id": run_id, "status": "paused", "run_dir": str(run_dir)}
 
+def execute_run(
+    config: Dict,
+    run_id: str,
+    cancel_check: Optional[Callable[[], bool]] = None,
+) -> Dict:
+    run = _require_run(run_id)
+    run_dir = _run_dir(run_id)
+    outputs_dir = _outputs_dir(run_id)
+    worktree_path = Path(run["worktree_path"])
+    goal = str(run["goal"])
+    metadata = run.get("metadata", {}) or {}
+    max_rework_rounds = int(metadata.get("max_rework_rounds", _max_rework_rounds(config, None)))
+    plan_path = run_dir / "plan.md"
+    task_plan_path = run_dir / "task-plan.json"
+    if not plan_path.exists():
+        raise FileNotFoundError(f"Plan file not found for run {run_id}: {plan_path}")
+    if not task_plan_path.exists():
+        raise FileNotFoundError(f"Task plan file not found for run {run_id}: {task_plan_path}")
+    plan = plan_path.read_text(encoding="utf-8")
+    task_plan = _load_task_plan(task_plan_path)
+    worker_names = [str(task.get("agent")) for task in task_plan.get("tasks", []) if str(task.get("agent", "")).strip()]
+
+    try:
+        _ensure_not_cancelled(run_id, cancel_check)
         db.update_run(run_id, status="running")
+        db.add_event(run_id, now_iso(), "system", "execution_started", "worker execution started")
         worker_log_parts: List[str] = []
         previous_output = ""
         for index, worker_name in enumerate(worker_names):
+            _ensure_not_cancelled(run_id, cancel_check)
             task_id = task_plan["tasks"][index]["id"] if index < len(task_plan["tasks"]) else ""
             print(f"\nRunning worker: {worker_name}")
             db.add_event(run_id, now_iso(), worker_name, "task_started", f"started {task_id}", {"task_id": task_id})
@@ -134,6 +225,7 @@ def run_task(
 
         review = ""
         for review_round in range(max_rework_rounds + 1):
+            _ensure_not_cancelled(run_id, cancel_check)
             print("\nRunning reviewer.")
             review = _run_agent(
                 config,
@@ -161,6 +253,7 @@ def run_task(
             if not _review_requests_changes(review) or review_round >= max_rework_rounds:
                 break
 
+            _ensure_not_cancelled(run_id, cancel_check)
             print(f"\nReviewer requested changes; running rework round {review_round + 1}.")
             rework_output = _run_agent(
                 config,
@@ -216,6 +309,7 @@ def run_task(
             (run_dir / "status.txt").write_text(status_text, encoding="utf-8")
             (run_dir / "diff.patch").write_text(diff_text, encoding="utf-8")
 
+        _ensure_not_cancelled(run_id, cancel_check)
         print("\nRunning master final summary.")
         summary = _run_agent(
             config,
@@ -236,18 +330,14 @@ def run_task(
         (run_dir / "summary.md").write_text(summary, encoding="utf-8")
         write_agent_result(outputs_dir / "final", "master", summary, "completed")
         db.update_run(run_id, status="reviewed", summary=summary)
-    except Exception as exc:
-        (run_dir / "failure.txt").write_text(str(exc), encoding="utf-8")
-        db.update_run(run_id, status="failed", summary=str(exc))
-        print(f"\nRun failed: {exc}")
-        print(f"Run directory: {run_dir}")
+        db.add_event(run_id, now_iso(), "master", "execution_completed", "run reviewed")
+        return {"id": run_id, "status": "reviewed", "summary": summary, "run_dir": str(run_dir)}
+    except RunCancelled as exc:
+        _mark_cancelled(run_id, str(exc))
         raise
-
-    print("\n--- Final summary ---")
-    print(_preview(summary, 5000))
-    print(f"\nNext: agentsCluster apply {run_id}")
-
-    return {"id": run_id, "status": "reviewed", "run_dir": str(run_dir)}
+    except Exception as exc:
+        _write_failure(run_id, exc)
+        raise
 
 
 def _run_agent(config: Dict, agent_name: str, prompt: str, cwd: Path, output_dir: Path) -> str:
@@ -326,6 +416,53 @@ def _cap(text: str, limit: int = 60000) -> str:
 
 def _preview(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + "\n...[truncated]"
+
+
+def _run_dir(run_id: str) -> Path:
+    return RUNS_DIR / run_id
+
+
+def _outputs_dir(run_id: str) -> Path:
+    return _run_dir(run_id) / "agent_outputs"
+
+
+def _require_run(run_id: str) -> Dict:
+    run = db.get_run(run_id)
+    if not run:
+        raise KeyError(f"Run not found: {run_id}")
+    return run
+
+
+def _load_task_plan(path: Path) -> Dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _worker_names(metadata: Dict) -> List[str]:
+    raw = metadata.get("workers") or DEFAULT_WORKERS
+    if isinstance(raw, list):
+        return [str(item) for item in raw if str(item).strip()]
+    return DEFAULT_WORKERS
+
+
+def _ensure_not_cancelled(run_id: str, cancel_check: Optional[Callable[[], bool]]) -> None:
+    run = db.get_run(run_id)
+    if run and run.get("status") == "cancel_requested":
+        raise RunCancelled(f"Run {run_id} was cancelled")
+    if cancel_check and cancel_check():
+        raise RunCancelled(f"Run {run_id} was cancelled")
+
+
+def _write_failure(run_id: str, exc: Exception) -> None:
+    run_dir = _run_dir(run_id)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "failure.txt").write_text(str(exc), encoding="utf-8")
+    db.update_run(run_id, status="failed", summary=str(exc))
+    db.add_event(run_id, now_iso(), "system", "run_failed", str(exc))
+
+
+def _mark_cancelled(run_id: str, reason: str) -> None:
+    db.update_run(run_id, status="cancelled", summary=reason)
+    db.add_event(run_id, now_iso(), "system", "run_cancelled", reason)
 
 
 def apply_run(run_id: str, mode: Optional[str] = None) -> None:

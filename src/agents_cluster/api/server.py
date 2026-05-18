@@ -10,10 +10,12 @@ from typing import Any, Dict, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 from agents_cluster.core import db
-from agents_cluster.core.config import add_project, get_agent, list_projects, load_config, remove_project, save_config
+from agents_cluster.core.config import add_project, find_project, get_agent, list_projects, load_config, remove_project, save_config
 from agents_cluster.core.paths import PATCHES_DIR
 from agents_cluster.orchestrator.agent_test import test_agent
+from agents_cluster.orchestrator.controller import create_run
 from agents_cluster.workspace import git_ops
+from .run_queue import RUN_QUEUE
 
 
 def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
@@ -96,9 +98,26 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
             save_config(config)
             self._send_json({"project": project}, HTTPStatus.CREATED)
             return
+        if route == "/api/runs":
+            self._handle_create_run()
+            return
         if route.startswith("/api/agents/") and route.endswith("/test"):
             agent_name = unquote(route.removeprefix("/api/agents/").removesuffix("/test").strip("/"))
             self._handle_agent_test(agent_name)
+            return
+        if route.startswith("/api/runs/") and route.endswith("/approve-plan"):
+            run_id, action = _run_route(route)
+            if action != "approve-plan":
+                self._send_error(HTTPStatus.NOT_FOUND, f"Unknown run action: {action}")
+                return
+            self._handle_approve_plan(run_id)
+            return
+        if route.startswith("/api/runs/") and route.endswith("/cancel"):
+            run_id, action = _run_route(route)
+            if action != "cancel":
+                self._send_error(HTTPStatus.NOT_FOUND, f"Unknown run action: {action}")
+                return
+            self._handle_cancel_run(run_id)
             return
         if route.startswith("/api/runs/") and route.endswith("/apply"):
             run_id, action = _run_route(route)
@@ -192,6 +211,90 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
             self._send_error(HTTPStatus.NOT_FOUND, str(exc))
         except ValueError:
             return
+        except Exception as exc:
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+
+    def _handle_create_run(self) -> None:
+        try:
+            body = self._read_json()
+        except ValueError:
+            return
+        selector = str(body.get("project") or "").strip()
+        goal = str(body.get("goal") or "").strip()
+        if not selector:
+            self._send_error(HTTPStatus.BAD_REQUEST, "Field 'project' is required")
+            return
+        if not goal:
+            self._send_error(HTTPStatus.BAD_REQUEST, "Field 'goal' is required")
+            return
+
+        config = load_config()
+        try:
+            project = find_project(config, selector)
+        except KeyError as exc:
+            self._send_error(HTTPStatus.NOT_FOUND, str(exc))
+            return
+
+        workers = body.get("workers")
+        if workers is not None and not isinstance(workers, list):
+            self._send_error(HTTPStatus.BAD_REQUEST, "Field 'workers' must be an array when provided")
+            return
+        worker_names = [str(item).strip() for item in workers or [] if str(item).strip()] or None
+        max_rework_rounds = body.get("max_rework_rounds")
+        if max_rework_rounds is not None and not isinstance(max_rework_rounds, int):
+            self._send_error(HTTPStatus.BAD_REQUEST, "Field 'max_rework_rounds' must be an integer when provided")
+            return
+
+        try:
+            run = create_run(
+                config,
+                project,
+                goal,
+                workers=worker_names,
+                max_rework_rounds=max_rework_rounds,
+            )
+            RUN_QUEUE.submit_plan(run["id"])
+            self._send_json({"run_id": run["id"], "status": "planning"}, HTTPStatus.ACCEPTED)
+        except Exception as exc:
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+
+    def _handle_approve_plan(self, run_id: str) -> None:
+        try:
+            body = self._read_json()
+        except ValueError:
+            return
+        if body.get("confirm") is not True:
+            self._send_error(HTTPStatus.BAD_REQUEST, "approve-plan requires confirm=true")
+            return
+        run = db.get_run(run_id)
+        if not run:
+            self._send_error(HTTPStatus.NOT_FOUND, f"Run not found: {run_id}")
+            return
+        if run["status"] not in {"waiting_approval", "planned", "paused"}:
+            self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} is not waiting for approval")
+            return
+        try:
+            RUN_QUEUE.submit_execute(run_id)
+            self._send_json({"run_id": run_id, "status": "running"}, HTTPStatus.ACCEPTED)
+        except Exception as exc:
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+
+    def _handle_cancel_run(self, run_id: str) -> None:
+        try:
+            body = self._read_json()
+        except ValueError:
+            return
+        if body.get("confirm") is not True:
+            self._send_error(HTTPStatus.BAD_REQUEST, "cancel requires confirm=true")
+            return
+        run = db.get_run(run_id)
+        if not run:
+            self._send_error(HTTPStatus.NOT_FOUND, f"Run not found: {run_id}")
+            return
+        try:
+            RUN_QUEUE.request_cancel(run_id)
+            updated = db.get_run(run_id) or run
+            self._send_json({"run_id": run_id, "status": updated["status"]})
         except Exception as exc:
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
