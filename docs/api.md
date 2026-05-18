@@ -96,9 +96,9 @@ http://127.0.0.1:8765
 典型流程：
 
 1. `POST /api/runs` 创建 run 并在后台开始 planning。
-2. 前端轮询 `GET /api/runs/{run_id}`，直到 `status=waiting_approval`（或 `failed/cancelled`）。
+2. 前端轮询 `GET /api/runs/{run_id}`，直到 `status=waiting_approval`（或 `failed/cancelled/interrupted`）。
 3. 用户审阅 planning 产物后，`POST /api/runs/{run_id}/approve-plan`（需 `confirm=true`）进入执行阶段。
-4. 继续轮询直到 `status=reviewed`（或 `failed/cancelled`）。
+4. 继续轮询直到 `status=reviewed`（或 `failed/cancelled/interrupted`）。
 5. 用户在 `POST /api/runs/{run_id}/apply` 里选择 `diff/patch/merge/discard`。
 
 常见状态值（不是严格枚举，前端以实际返回为准）：
@@ -109,6 +109,7 @@ http://127.0.0.1:8765
 - `reviewed`：完成并产出最终 summary。
 - `cancel_requested`：取消已请求（运行中时触发，下一次取消检查点会生效）。
 - `cancelled`：已取消。
+- `interrupted`：服务重启后发现旧 run 未正常收尾，系统已保守停止，不会自动继续调用模型。
 - `failed`：失败。
 - `merged`：已合并到项目仓库（apply=merge 后）。
 - `discarded`：已丢弃 worktree（apply=discard 后）。
@@ -119,6 +120,7 @@ http://127.0.0.1:8765
 - `planning_started` / `planning_completed`
 - `queue_started` / `queue_completed` / `queue_failed`
 - `execution_completed`
+- `run_recovered` / `run_interrupted`
 - `cancel_requested` / `run_cancelled`
 - `run_failed`
 
@@ -255,7 +257,41 @@ http://127.0.0.1:8765
 
 ### GET /api/runs/{run_id}/events
 
-只查询事件列表。
+只查询事件列表。支持增量查询：
+
+```text
+GET /api/runs/{run_id}/events?after_id=120&limit=200
+```
+
+返回中的每个 event 都包含：
+
+- `id`
+- `created_at`
+- `agent`
+- `kind`
+- `message`
+- `metadata`
+
+### GET /api/runs/{run_id}/events/stream
+
+SSE 事件流接口，适合前端做实时订阅。支持参数：
+
+```text
+GET /api/runs/{run_id}/events/stream?after_id=120&timeout=25&limit=500
+```
+
+说明：
+
+- `after_id`：只推送指定 event id 之后的新事件。
+- `timeout`：服务端这次连接最长保持的秒数；超时后前端应自动重连。
+- `limit`：单轮轮询最多返回的事件数。
+
+SSE 事件类型：
+
+- `ready`
+- `run-state`
+- `run-event`
+- `done`
 
 ### POST /api/runs/{run_id}/approve-plan
 
@@ -331,4 +367,3 @@ http://127.0.0.1:8765
   "confirm": true
 }
 ```
-

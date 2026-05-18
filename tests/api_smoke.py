@@ -6,13 +6,12 @@ import tempfile
 import threading
 import time
 import urllib.request
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from uuid import uuid4
 
-from agents_cluster.api.server import AgentsClusterHandler
+from agents_cluster.api.server import create_server
 from agents_cluster.core import db
-from agents_cluster.core.paths import CONFIG_PATH
+from agents_cluster.core.paths import CONFIG_PATH, RUNS_DIR
 from agents_cluster.core.time import now_iso
 from agents_cluster.orchestrator import controller
 from agents_cluster.workspace import git_ops
@@ -48,14 +47,39 @@ def wait_for_status(base_url: str, run_id: str, expected: str, timeout: float = 
     raise RuntimeError(f"Run {run_id} did not reach status {expected}; last={last}")
 
 
+def read_sse_until(url: str, target_event: str = "run-event", timeout: float = 10.0):
+    result = {}
+
+    def _reader():
+        current_event = ""
+        try:
+            req = urllib.request.Request(url, headers={"Accept": "text/event-stream"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8").strip()
+                    if not line or line.startswith(":") or line.startswith("retry:"):
+                        continue
+                    if line.startswith("event:"):
+                        current_event = line.partition(":")[2].strip()
+                        continue
+                    if line.startswith("data:"):
+                        payload = json.loads(line.partition(":")[2].strip())
+                        if current_event == target_event:
+                            result["event"] = current_event
+                            result["payload"] = payload
+                            return
+        except Exception as exc:
+            result["error"] = repr(exc)
+
+    thread = threading.Thread(target=_reader, daemon=True)
+    thread.start()
+    return result, thread
+
+
 def main() -> None:
     db.init_db()
     original_config = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else None
     original_run_agent = controller._run_agent
-    server = ThreadingHTTPServer(("127.0.0.1", 0), AgentsClusterHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    base_url = f"http://127.0.0.1:{server.server_port}"
 
     try:
         def fake_run_agent(config, agent_name, prompt, cwd, output_dir):
@@ -78,8 +102,67 @@ def main() -> None:
             run(["git", "add", "README.md"], repo)
             run(["git", "commit", "-m", "init"], repo)
 
+            recovery_project = {"name": "api-smoke", "path": str(repo)}
+
+            planning_recovery_id = f"run_api_recovery_plan_{uuid4().hex[:6]}"
+            planning_info = prepare_worktree(recovery_project, planning_recovery_id)
+            planning_worktree = Path(planning_info["worktree_path"])
+            planning_run_dir = RUNS_DIR / planning_recovery_id
+            planning_run_dir.mkdir(parents=True, exist_ok=True)
+            db.insert_run(
+                {
+                    "id": planning_recovery_id,
+                    "created_at": now_iso(),
+                    "project_name": planning_info["project_name"],
+                    "project_path": planning_info["project_path"],
+                    "worktree_path": planning_info["worktree_path"],
+                    "branch_name": planning_info["branch_name"],
+                    "goal": "recover planning",
+                    "status": "planning",
+                    "metadata": {"base_branch": planning_info["base_branch"]},
+                }
+            )
+            (planning_run_dir / "plan.md").write_text("plan recovered", encoding="utf-8")
+            (planning_run_dir / "task-plan.json").write_text(
+                json.dumps({"tasks": [{"id": "t1", "agent": "coder"}]}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            interrupted_recovery_id = f"run_api_recovery_exec_{uuid4().hex[:6]}"
+            interrupted_info = prepare_worktree(recovery_project, interrupted_recovery_id)
+            interrupted_worktree = Path(interrupted_info["worktree_path"])
+            interrupted_run_dir = RUNS_DIR / interrupted_recovery_id
+            interrupted_run_dir.mkdir(parents=True, exist_ok=True)
+            db.insert_run(
+                {
+                    "id": interrupted_recovery_id,
+                    "created_at": now_iso(),
+                    "project_name": interrupted_info["project_name"],
+                    "project_path": interrupted_info["project_path"],
+                    "worktree_path": interrupted_info["worktree_path"],
+                    "branch_name": interrupted_info["branch_name"],
+                    "goal": "recover execution",
+                    "status": "running",
+                    "metadata": {"base_branch": interrupted_info["base_branch"]},
+                }
+            )
+            (interrupted_worktree / "README.md").write_text("# api smoke\n\npartial\n", encoding="utf-8")
+
+            server = create_server("127.0.0.1", 0)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base_url = f"http://127.0.0.1:{server.server_port}"
+
             health = request_json(f"{base_url}/health")
             assert health["ok"] is True
+
+            recovered_plan = request_json(f"{base_url}/api/runs/{planning_recovery_id}")
+            assert recovered_plan["run"]["status"] == "waiting_approval"
+            assert any(event["kind"] == "run_recovered" for event in recovered_plan["events"])
+
+            recovered_exec = request_json(f"{base_url}/api/runs/{interrupted_recovery_id}")
+            assert recovered_exec["run"]["status"] == "interrupted"
+            assert any(event["kind"] == "run_interrupted" for event in recovered_exec["events"])
 
             created = request_json(
                 f"{base_url}/api/projects",
@@ -166,6 +249,19 @@ def main() -> None:
             assert waiting["run"]["goal"] == "exercise async flow"
             assert any(event["kind"] == "planning_completed" for event in waiting["events"])
 
+            existing_events = request_json(f"{base_url}/api/runs/{async_run_id}/events")
+            last_event_id = existing_events["events"][-1]["id"]
+            stream_result, stream_thread = read_sse_until(
+                f"{base_url}/api/runs/{async_run_id}/events/stream?after_id={last_event_id}&timeout=5"
+            )
+            time.sleep(0.3)
+            db.add_event(async_run_id, now_iso(), "tester", "stream_test", "stream ok", {"source": "api_smoke"})
+            stream_thread.join(timeout=6)
+            assert stream_result.get("error") is None, stream_result.get("error")
+            assert stream_result["event"] == "run-event"
+            assert stream_result["payload"]["kind"] == "stream_test"
+            assert stream_result["payload"]["metadata"]["source"] == "api_smoke"
+
             approved = request_json(
                 f"{base_url}/api/runs/{async_run_id}/approve-plan",
                 method="POST",
@@ -199,14 +295,19 @@ def main() -> None:
                 if queued_worktree.exists():
                     git_ops.remove_worktree(repo, queued_worktree, force=True)
 
+            for extra_worktree in (planning_worktree, interrupted_worktree):
+                if extra_worktree.exists():
+                    git_ops.remove_worktree(repo, extra_worktree, force=True)
+
             removed = request_json(f"{base_url}/api/projects/api-smoke", method="DELETE")
             assert removed["removed"]["name"] == "api-smoke"
 
             runs = request_json(f"{base_url}/api/runs?limit=1")
             assert "runs" in runs
     finally:
-        server.shutdown()
-        server.server_close()
+        if "server" in locals():
+            server.shutdown()
+            server.server_close()
         controller._run_agent = original_run_agent
         if original_config is not None:
             CONFIG_PATH.write_text(original_config, encoding="utf-8")

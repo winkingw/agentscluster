@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from .paths import DB_PATH
 
@@ -91,15 +91,16 @@ def add_event(
     kind: str,
     message: str,
     metadata: Optional[Dict[str, Any]] = None,
-) -> None:
+) -> int:
     with connect() as conn:
-        conn.execute(
+        cur = conn.execute(
             """
             insert into events (run_id, created_at, agent, kind, message, metadata_json)
             values (?, ?, ?, ?, ?, ?)
             """,
             (run_id, created_at, agent, kind, message, json.dumps(metadata or {}, ensure_ascii=False)),
         )
+        return int(cur.lastrowid or 0)
 
 
 def get_run(run_id: str) -> Optional[Dict[str, Any]]:
@@ -117,16 +118,36 @@ def list_runs(limit: int = 20) -> List[Dict[str, Any]]:
         return [_row_to_run(row) for row in rows]
 
 
-def list_events(run_id: str) -> List[Dict[str, Any]]:
+def list_events(run_id: str, *, after_id: int = 0, limit: int = 500) -> List[Dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
-            "select * from events where run_id=? order by id asc",
-            (run_id,),
+            "select * from events where run_id=? and id>? order by id asc limit ?",
+            (run_id, int(after_id), int(max(1, limit))),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [_row_to_event(row) for row in rows]
+
+
+def list_runs_by_status(statuses: Sequence[str], *, limit: int = 200) -> List[Dict[str, Any]]:
+    normalized = [str(s).strip() for s in statuses if str(s).strip()]
+    if not normalized:
+        return []
+    placeholders = ", ".join("?" for _ in normalized)
+    with connect() as conn:
+        rows = conn.execute(
+            f"select * from runs where status in ({placeholders}) order by created_at desc limit ?",
+            (*normalized, int(max(1, limit))),
+        ).fetchall()
+        return [_row_to_run(row) for row in rows]
 
 
 def _row_to_run(row: sqlite3.Row) -> Dict[str, Any]:
     data = dict(row)
+    data["metadata"] = json.loads(data.pop("metadata_json") or "{}")
+    return data
+
+
+def _row_to_event(row: sqlite3.Row) -> Dict[str, Any]:
+    data = dict(row)
+    # Present a stable JSON shape to callers; keep the raw column out of the public payload.
     data["metadata"] = json.loads(data.pop("metadata_json") or "{}")
     return data

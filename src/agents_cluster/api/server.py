@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import sys
+import time
 from contextlib import redirect_stderr, redirect_stdout
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 from agents_cluster.core import db
@@ -18,10 +20,33 @@ from agents_cluster.workspace import git_ops
 from .run_queue import RUN_QUEUE
 
 
-def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
+TERMINAL_RUN_STATUSES = {"reviewed", "failed", "cancelled", "merged", "discarded", "interrupted"}
+
+
+class AgentsClusterHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request: Any, client_address: Tuple[str, int]) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError)):
+            return
+        super().handle_error(request, client_address)
+
+
+def create_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
     db.init_db()
-    server = ThreadingHTTPServer((host, port), AgentsClusterHandler)
+    recovered = RUN_QUEUE.recover_stale_runs()
+    server = AgentsClusterHTTPServer((host, port), AgentsClusterHandler)
+    server.agentscluster_recovered = recovered  # type: ignore[attr-defined]
+    return server
+
+
+def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
+    server = create_server(host, port)
     print(f"agentsCluster API listening on http://{host}:{port}")
+    recovered = getattr(server, "agentscluster_recovered", 0)
+    if recovered:
+        print(f"Recovered {recovered} stale run(s) on startup.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -69,8 +94,13 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
             if not run:
                 self._send_error(HTTPStatus.NOT_FOUND, f"Run not found: {run_id}")
                 return
+            if action == "events/stream":
+                self._handle_event_stream(run_id, query, run=run)
+                return
             if action == "events":
-                self._send_json({"run_id": run_id, "events": db.list_events(run_id)})
+                after_id = _int_query(query, "after_id", 0, minimum=0)
+                limit = _int_query(query, "limit", 500, minimum=1, maximum=2000)
+                self._send_json({"run_id": run_id, "events": db.list_events(run_id, after_id=after_id, limit=limit)})
                 return
             if action == "diff":
                 self._send_json({"run_id": run_id, "diff": git_ops.diff(Path(run["worktree_path"]))})
@@ -175,6 +205,22 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_sse_headers(self, status: HTTPStatus = HTTPStatus.OK) -> None:
+        self.send_response(int(status))
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def _write_sse_event(self, event: str, payload: Dict[str, Any]) -> None:
+        body = f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+        self.wfile.write(body)
+        self.wfile.flush()
 
     def _send_error(self, status: HTTPStatus, message: str) -> None:
         self._send_json({"error": message}, status)
@@ -342,13 +388,79 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
+    def _handle_event_stream(self, run_id: str, query: Dict[str, Any], *, run: Optional[Dict[str, Any]] = None) -> None:
+        run = run or db.get_run(run_id)
+        if not run:
+            self._send_error(HTTPStatus.NOT_FOUND, f"Run not found: {run_id}")
+            return
 
-def _int_query(query: Dict[str, Any], name: str, default: int) -> int:
+        after_id = _int_query(query, "after_id", 0, minimum=0)
+        limit = _int_query(query, "limit", 500, minimum=1, maximum=2000)
+        timeout_seconds = _int_query(query, "timeout", 25, minimum=1, maximum=300)
+        poll_interval = 0.25
+        deadline = time.time() + timeout_seconds
+        last_id = after_id
+        last_status = str(run.get("status") or "")
+
+        try:
+            self._send_sse_headers()
+            self.wfile.write(b"retry: 2000\n\n")
+            self.wfile.flush()
+            self._write_sse_event(
+                "ready",
+                {
+                    "run_id": run_id,
+                    "after_id": after_id,
+                    "timeout": timeout_seconds,
+                    "run": run,
+                },
+            )
+            self._write_sse_event("run-state", {"run_id": run_id, "status": last_status})
+
+            while time.time() < deadline:
+                events = db.list_events(run_id, after_id=last_id, limit=limit)
+                for event in events:
+                    event_id = int(event.get("id") or 0)
+                    last_id = max(last_id, event_id)
+                    self._write_sse_event("run-event", event)
+
+                current_run = db.get_run(run_id)
+                current_status = str((current_run or {}).get("status") or "")
+                if current_status and current_status != last_status:
+                    self._write_sse_event("run-state", {"run_id": run_id, "status": current_status})
+                    last_status = current_status
+
+                if current_status in TERMINAL_RUN_STATUSES and not events:
+                    self._write_sse_event(
+                        "done",
+                        {"run_id": run_id, "status": current_status, "last_event_id": last_id},
+                    )
+                    return
+
+                time.sleep(poll_interval)
+
+            self.wfile.write(b": timeout\n\n")
+            self.wfile.flush()
+        except OSError:
+            return
+
+
+def _int_query(
+    query: Dict[str, Any],
+    name: str,
+    default: int,
+    *,
+    minimum: int = 1,
+    maximum: Optional[int] = None,
+) -> int:
     try:
         values = query.get(name)
         if not values:
             return default
-        return max(1, int(values[0]))
+        parsed = int(values[0])
+        if maximum is not None:
+            parsed = min(maximum, parsed)
+        return max(minimum, parsed)
     except (TypeError, ValueError):
         return default
 

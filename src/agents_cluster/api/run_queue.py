@@ -8,6 +8,7 @@ from agents_cluster.core import db
 from agents_cluster.core.config import load_config
 from agents_cluster.core.time import now_iso
 from agents_cluster.orchestrator.controller import RunCancelled, execute_run, plan_run
+from agents_cluster.core.paths import RUNS_DIR
 
 
 class RunQueue:
@@ -22,6 +23,59 @@ class RunQueue:
 
     def submit_execute(self, run_id: str) -> None:
         self._submit(run_id, "execute")
+
+    def recover_stale_runs(self) -> int:
+        """
+        Best-effort recovery for runs left in non-terminal states after a server restart.
+
+        This does NOT enqueue any new model calls. It only normalizes statuses based on
+        existing artifacts on disk, so the UI can present a consistent state.
+        """
+        recovered = 0
+        candidates = db.list_runs_by_status(
+            ["planning", "running", "cancel_requested", "queued"],
+            limit=200,
+        )
+        for run in candidates:
+            run_id = str(run.get("id") or "")
+            if not run_id:
+                continue
+            run_dir = RUNS_DIR / run_id
+            plan_path = run_dir / "plan.md"
+            task_plan_path = run_dir / "task-plan.json"
+            summary_path = run_dir / "summary.md"
+            status = str(run.get("status") or "")
+
+            # If a final summary exists, promote to reviewed.
+            if summary_path.exists():
+                summary_text = ""
+                try:
+                    summary_text = summary_path.read_text(encoding="utf-8").strip()
+                except Exception:
+                    summary_text = ""
+                db.update_run(run_id, status="reviewed", summary=summary_text or run.get("summary"))
+                db.add_event(run_id, now_iso(), "system", "run_recovered", f"recovered from {status}: summary exists")
+                recovered += 1
+                continue
+
+            # Planning may have finished writing artifacts before the status update landed.
+            if status == "planning" and plan_path.exists() and task_plan_path.exists():
+                db.update_run(run_id, status="waiting_approval")
+                db.add_event(
+                    run_id,
+                    now_iso(),
+                    "system",
+                    "run_recovered",
+                    f"recovered from {status}: plan artifacts exist",
+                )
+                recovered += 1
+                continue
+
+            # Otherwise, we cannot safely resume without re-running models.
+            db.update_run(run_id, status="interrupted", summary=f"interrupted from {status} after server restart")
+            db.add_event(run_id, now_iso(), "system", "run_interrupted", f"interrupted from {status} after server restart")
+            recovered += 1
+        return recovered
 
     def request_cancel(self, run_id: str) -> None:
         with self._lock:
