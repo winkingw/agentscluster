@@ -140,6 +140,30 @@ def list_runs_by_status(statuses: Sequence[str], *, limit: int = 200) -> List[Di
         return [_row_to_run(row) for row in rows]
 
 
+def list_runs_by_project_path_and_status(
+    project_path: str,
+    statuses: Sequence[str],
+    *,
+    limit: int = 200,
+) -> List[Dict[str, Any]]:
+    path_value = str(project_path).strip()
+    normalized = [str(s).strip() for s in statuses if str(s).strip()]
+    if not path_value or not normalized:
+        return []
+    placeholders = ", ".join("?" for _ in normalized)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            select * from runs
+            where project_path=? and status in ({placeholders})
+            order by created_at desc
+            limit ?
+            """,
+            (path_value, *normalized, int(max(1, limit))),
+        ).fetchall()
+        return [_row_to_run(row) for row in rows]
+
+
 def _row_to_run(row: sqlite3.Row) -> Dict[str, Any]:
     data = dict(row)
     data["metadata"] = json.loads(data.pop("metadata_json") or "{}")

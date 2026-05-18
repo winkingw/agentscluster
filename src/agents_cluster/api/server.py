@@ -22,6 +22,7 @@ from .run_queue import RUN_QUEUE
 
 
 TERMINAL_RUN_STATUSES = {"reviewed", "failed", "cancelled", "merged", "discarded", "interrupted"}
+ACTIVE_RUN_STATUSES = {"queued", "planning", "planned", "paused", "waiting_approval", "running", "cancel_requested"}
 RUN_ARTIFACT_MAX_BYTES = 2_000_000
 
 
@@ -165,6 +166,13 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
                 return
             self._handle_retry_execute(run_id)
             return
+        if route.startswith("/api/runs/") and route.endswith("/resume"):
+            run_id, action = _run_route(route)
+            if action != "resume":
+                self._send_error(HTTPStatus.NOT_FOUND, f"Unknown run action: {action}")
+                return
+            self._handle_resume_run(run_id)
+            return
         if route.startswith("/api/runs/") and route.endswith("/cancel"):
             run_id, action = _run_route(route)
             if action != "cancel":
@@ -303,6 +311,13 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         except KeyError as exc:
             self._send_error(HTTPStatus.NOT_FOUND, str(exc))
             return
+        active_conflicts = _project_active_conflicts(project, exclude_run_id=None)
+        if active_conflicts:
+            self._send_error(
+                HTTPStatus.CONFLICT,
+                f"Project already has active run(s): {', '.join(run['id'] for run in active_conflicts[:5])}",
+            )
+            return
 
         workers = body.get("workers")
         if workers is not None and not isinstance(workers, list):
@@ -342,6 +357,13 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         if run["status"] not in {"waiting_approval", "planned", "paused"}:
             self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} is not waiting for approval")
             return
+        active_conflicts = _project_active_conflicts(_project_selector_from_run(run), exclude_run_id=run_id)
+        if active_conflicts:
+            self._send_error(
+                HTTPStatus.CONFLICT,
+                f"Project already has active run(s): {', '.join(item['id'] for item in active_conflicts[:5])}",
+            )
+            return
         try:
             RUN_QUEUE.submit_execute(run_id)
             self._send_json({"run_id": run_id, "status": "running"}, HTTPStatus.ACCEPTED)
@@ -366,6 +388,13 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
             return
         if run.get("status") in {"merged", "discarded"}:
             self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} is already finalized: {run.get('status')}")
+            return
+        active_conflicts = _project_active_conflicts(_project_selector_from_run(run), exclude_run_id=run_id)
+        if active_conflicts:
+            self._send_error(
+                HTTPStatus.CONFLICT,
+                f"Project already has active run(s): {', '.join(item['id'] for item in active_conflicts[:5])}",
+            )
             return
         try:
             db.update_run(run_id, status="queued", summary=None)
@@ -404,6 +433,13 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         if not worktree_path.exists():
             self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} worktree not found: {worktree_path}")
             return
+        active_conflicts = _project_active_conflicts(_project_selector_from_run(run), exclude_run_id=run_id)
+        if active_conflicts:
+            self._send_error(
+                HTTPStatus.CONFLICT,
+                f"Project already has active run(s): {', '.join(item['id'] for item in active_conflicts[:5])}",
+            )
+            return
         try:
             db.update_run(run_id, status="queued")
             db.add_event(run_id, now_iso(), "system", "retry_execute_requested", "retry execute requested")
@@ -412,6 +448,66 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         try:
             RUN_QUEUE.submit_execute(run_id)
             self._send_json({"run_id": run_id, "status": "running"}, HTTPStatus.ACCEPTED)
+        except Exception as exc:
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+
+    def _handle_resume_run(self, run_id: str) -> None:
+        try:
+            body = self._read_json()
+        except ValueError:
+            return
+        if body.get("confirm") is not True:
+            self._send_error(HTTPStatus.BAD_REQUEST, "resume requires confirm=true")
+            return
+        run = db.get_run(run_id)
+        if not run:
+            self._send_error(HTTPStatus.NOT_FOUND, f"Run not found: {run_id}")
+            return
+        if run.get("status") in {"merged", "discarded"}:
+            self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} is already finalized: {run.get('status')}")
+            return
+        active_conflicts = _project_active_conflicts(_project_selector_from_run(run), exclude_run_id=run_id)
+        if active_conflicts:
+            self._send_error(
+                HTTPStatus.CONFLICT,
+                f"Project already has active run(s): {', '.join(item['id'] for item in active_conflicts[:5])}",
+            )
+            return
+
+        run_dir = RUNS_DIR / run_id
+        summary_path = run_dir / "summary.md"
+        plan_path = run_dir / "plan.md"
+        task_plan_path = run_dir / "task-plan.json"
+        worktree_path = Path(str(run.get("worktree_path") or ""))
+        if not worktree_path.exists():
+            self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} worktree not found: {worktree_path}")
+            return
+        if summary_path.exists():
+            self._send_json({"run_id": run_id, "status": run.get("status") or "reviewed", "mode": "noop"})
+            return
+
+        if plan_path.exists() and task_plan_path.exists():
+            try:
+                db.update_run(run_id, status="queued")
+                db.add_event(run_id, now_iso(), "system", "resume_requested", "resume requested: execute")
+            except Exception:
+                pass
+            try:
+                RUN_QUEUE.submit_execute(run_id)
+                self._send_json({"run_id": run_id, "status": "running", "mode": "execute"}, HTTPStatus.ACCEPTED)
+                return
+            except Exception as exc:
+                self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+                return
+
+        try:
+            db.update_run(run_id, status="queued", summary=None)
+            db.add_event(run_id, now_iso(), "system", "resume_requested", "resume requested: plan")
+        except Exception:
+            pass
+        try:
+            RUN_QUEUE.submit_plan(run_id)
+            self._send_json({"run_id": run_id, "status": "planning", "mode": "plan"}, HTTPStatus.ACCEPTED)
         except Exception as exc:
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
@@ -507,6 +603,9 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         branch_name = run["branch_name"]
 
         try:
+            if RUN_QUEUE.is_run_active(run_id) or str(run.get("status") or "") in ACTIVE_RUN_STATUSES:
+                self._send_error(HTTPStatus.CONFLICT, f"Run {run_id} is still active; cancel or wait before apply")
+                return
             if mode == "diff":
                 self._send_json({"run_id": run_id, "mode": mode, "diff": git_ops.diff(worktree_path)})
                 return
@@ -609,6 +708,26 @@ def _run_route(route: str) -> Tuple[str, str]:
     rest = route.removeprefix("/api/runs/").strip("/")
     run_id, _, action = rest.partition("/")
     return unquote(run_id), action.strip("/")
+
+
+def _project_selector_from_run(run: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "name": str(run.get("project_name") or ""),
+        "path": str(run.get("project_path") or ""),
+    }
+
+
+def _project_active_conflicts(project: Dict[str, Any], exclude_run_id: Optional[str]) -> list:
+    project_path = str(project.get("path") or "").strip()
+    if not project_path:
+        return []
+    runs = db.list_runs_by_project_path_and_status(project_path, ACTIVE_RUN_STATUSES, limit=50)
+    result = []
+    for run in runs:
+        if exclude_run_id and run.get("id") == exclude_run_id:
+            continue
+        result.append(run)
+    return result
 
 
 def _agent_summaries(config: Dict[str, Any]) -> list:

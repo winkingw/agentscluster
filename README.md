@@ -151,6 +151,11 @@ agentsCluster chat
 agentsCluster run --project D:\programs\your-project --goal "实现某个功能"
 agentsCluster runs list
 agentsCluster runs show run_YYYYMMDD_HHMMSS_xxxxxx
+agentsCluster runs replan run_YYYYMMDD_HHMMSS_xxxxxx
+agentsCluster runs execute run_YYYYMMDD_HHMMSS_xxxxxx --yes
+agentsCluster runs resume run_YYYYMMDD_HHMMSS_xxxxxx --yes
+agentsCluster runs artifacts run_YYYYMMDD_HHMMSS_xxxxxx
+agentsCluster runs artifacts run_YYYYMMDD_HHMMSS_xxxxxx --name plan.md
 agentsCluster apply run_YYYYMMDD_HHMMSS_xxxxxx --mode diff
 agentsCluster apply run_YYYYMMDD_HHMMSS_xxxxxx --mode patch
 agentsCluster apply run_YYYYMMDD_HHMMSS_xxxxxx --mode merge
@@ -162,6 +167,14 @@ agentsCluster apply run_YYYYMMDD_HHMMSS_xxxxxx --mode discard
 `test-agent <name>` 可以单独测试某个 agent，例如 `master`。默认会调用模型；如果只想验证配置和 runner，请加 `--dry-run`。
 
 `serve` 会启动本地 HTTP JSON API，后续前端可以直接请求。接口文档见 `docs\api.md`。
+
+`runs replan` 会对已有 run 重新生成 `plan.md` 和 `task-plan.json`。
+
+`runs execute` 会基于现有 planning 产物执行 worker / reviewer / final summary。
+
+`runs resume` 会根据 run 当前已有产物自动判断是重新 planning 还是继续 execute。
+
+`runs artifacts` 会列出或打印某个 run 的产物文件（`plan.md`、`task-plan.json`、`summary.md`、`agent_outputs/...` 等）。
 
 ## 运行产物
 

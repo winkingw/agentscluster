@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from uuid import uuid4
@@ -34,6 +35,25 @@ def request_json(url: str, method: str = "GET", payload=None):
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     with urllib.request.urlopen(req, timeout=10) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def request_error(url: str, method: str = "GET", payload=None):
+    data = None
+    headers = {}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            payload = {"raw": body}
+        return exc.code, payload
 
 
 def wait_for_status(base_url: str, run_id: str, expected: str, timeout: float = 10.0):
@@ -102,7 +122,7 @@ def main() -> None:
             run(["git", "add", "README.md"], repo)
             run(["git", "commit", "-m", "init"], repo)
 
-            recovery_project = {"name": "api-smoke", "path": str(repo)}
+            recovery_project = {"name": "api-smoke-recovery", "path": str(repo)}
 
             planning_recovery_id = f"run_api_recovery_plan_{uuid4().hex[:6]}"
             planning_info = prepare_worktree(recovery_project, planning_recovery_id)
@@ -163,6 +183,22 @@ def main() -> None:
             recovered_exec = request_json(f"{base_url}/api/runs/{interrupted_recovery_id}")
             assert recovered_exec["run"]["status"] == "interrupted"
             assert any(event["kind"] == "run_interrupted" for event in recovered_exec["events"])
+
+            db.update_run(planning_recovery_id, status="discarded")
+            if planning_worktree.exists():
+                git_ops.remove_worktree(repo, planning_worktree, force=True)
+
+            resumed_recovery = request_json(
+                f"{base_url}/api/runs/{interrupted_recovery_id}/resume",
+                method="POST",
+                payload={"confirm": True},
+            )
+            assert resumed_recovery["status"] == "planning"
+            resumed_recovery_detail = wait_for_status(base_url, interrupted_recovery_id, "waiting_approval")
+            assert any(event["kind"] == "resume_requested" for event in resumed_recovery_detail["events"])
+            db.update_run(interrupted_recovery_id, status="discarded")
+            if interrupted_worktree.exists():
+                git_ops.remove_worktree(repo, interrupted_worktree, force=True)
 
             created = request_json(
                 f"{base_url}/api/projects",
@@ -248,6 +284,22 @@ def main() -> None:
             waiting = wait_for_status(base_url, async_run_id, "waiting_approval")
             assert waiting["run"]["goal"] == "exercise async flow"
             assert any(event["kind"] == "planning_completed" for event in waiting["events"])
+
+            conflict_code, conflict_body = request_error(
+                f"{base_url}/api/runs",
+                method="POST",
+                payload={"project": "api-smoke", "goal": "should conflict"},
+            )
+            assert conflict_code == 409
+            assert "active run" in conflict_body["error"]
+
+            apply_conflict_code, apply_conflict_body = request_error(
+                f"{base_url}/api/runs/{async_run_id}/apply",
+                method="POST",
+                payload={"mode": "diff"},
+            )
+            assert apply_conflict_code == 409
+            assert "still active" in apply_conflict_body["error"]
 
             artifacts = request_json(f"{base_url}/api/runs/{async_run_id}/artifacts")
             artifact_names = {item["name"] for item in artifacts["artifacts"]}

@@ -24,6 +24,11 @@ class RunQueue:
     def submit_execute(self, run_id: str) -> None:
         self._submit(run_id, "execute")
 
+    def is_run_active(self, run_id: str) -> bool:
+        with self._lock:
+            future = self._futures.get(run_id)
+            return bool(future and not future.done())
+
     def recover_stale_runs(self) -> int:
         """
         Best-effort recovery for runs left in non-terminal states after a server restart.

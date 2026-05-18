@@ -132,6 +132,10 @@ def build_parser() -> argparse.ArgumentParser:
     runs_execute.add_argument("run_id")
     runs_execute.add_argument("--yes", action="store_true", help="Skip confirmation prompt.")
     runs_execute.set_defaults(func=cmd_runs_execute)
+    runs_resume = runs_sub.add_parser("resume", help="Resume an existing run based on its saved artifacts.")
+    runs_resume.add_argument("run_id")
+    runs_resume.add_argument("--yes", action="store_true", help="Skip confirmation prompt.")
+    runs_resume.set_defaults(func=cmd_runs_resume)
     runs_artifacts = runs_sub.add_parser("artifacts", help="List or print run artifacts.")
     runs_artifacts.add_argument("run_id")
     runs_artifacts.add_argument("--name", help="Relative artifact path to print.")
@@ -343,6 +347,32 @@ def cmd_runs_execute(args: argparse.Namespace) -> None:
     print(f"Run:     {args.run_id}")
     print(f"Status:  {result['status']}")
     print(f"Summary: {RUNS_DIR / args.run_id / 'summary.md'}")
+
+
+def cmd_runs_resume(args: argparse.Namespace) -> None:
+    db.init_db()
+    config = load_config()
+    run = db.get_run(args.run_id)
+    if not run:
+        raise KeyError(f"Run not found: {args.run_id}")
+    if run["status"] in {"merged", "discarded"}:
+        raise ValueError(f"Run {args.run_id} is already finalized: {run['status']}")
+    run_dir = RUNS_DIR / args.run_id
+    plan_path = run_dir / "plan.md"
+    task_plan_path = run_dir / "task-plan.json"
+    summary_path = run_dir / "summary.md"
+    if summary_path.exists():
+        print(f"Run already has summary: {summary_path}")
+        print(summary_path.read_text(encoding='utf-8'))
+        return
+    if plan_path.exists() and task_plan_path.exists():
+        cmd_runs_execute(args)
+        return
+    print(f"Re-running planning for: {args.run_id}")
+    result = plan_run(config, args.run_id)
+    print(f"Run:    {args.run_id}")
+    print(f"Status: {result['status']}")
+    print(f"Plan:   {RUNS_DIR / args.run_id / 'plan.md'}")
 
 
 def cmd_runs_artifacts(args: argparse.Namespace) -> None:

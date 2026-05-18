@@ -243,6 +243,11 @@ http://127.0.0.1:8765
 }
 ```
 
+并发约束：
+
+- 同一个 `project_path` 下只允许同时存在一个“活跃 run”（例如 `planning/queued/waiting_approval/running`）。
+- 如果项目已有活跃 run，会返回 `409 Conflict`，前端应提示用户先完成/取消/丢弃前一个 run。
+
 ### GET /api/runs/{run_id}
 
 查询 run 详情与事件列表：
@@ -394,6 +399,22 @@ GET /api/runs/{run_id}/artifacts/agent_outputs/final/master.result.json
 }
 ```
 
+### POST /api/runs/{run_id}/resume
+
+自动恢复入口（异步）。逻辑：
+
+- 如果 run 已有 `summary.md`：不做任何事，返回 `mode=noop`
+- 如果 run 已有 `plan.md + task-plan.json`：提交 execute 阶段，返回 `mode=execute`
+- 否则：提交 planning 阶段，返回 `mode=plan`
+
+请求：
+
+```json
+{
+  "confirm": true
+}
+```
+
 ### POST /api/runs/{run_id}/cancel
 
 请求取消（异步）。必须传：
@@ -440,6 +461,8 @@ GET /api/runs/{run_id}/artifacts/agent_outputs/final/master.result.json
 - `patch`：写出 `patches\\<run_id>.patch`。
 - `merge`：合并 worktree 分支到项目仓库，需要 `confirm=true`。
 - `discard`：删除 worktree，需要 `confirm=true`。
+
+注意：当 run 仍处于活跃状态（例如 `planning/queued/waiting_approval/running`）时，`apply` 会返回 `409 Conflict`，避免在后台任务运行时 merge/discard worktree。
 
 `merge` 示例：
 
