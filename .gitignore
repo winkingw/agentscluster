@@ -31,3 +31,5 @@ vendor/repos/
 !vendor/README.md
 !scripts/
 !scripts/install_optional_deps.ps1
+ui/node_modules/
+ui/dist/

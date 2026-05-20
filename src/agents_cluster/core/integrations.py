@@ -19,22 +19,22 @@ OPTIONAL_INTEGRATIONS: Dict[str, Dict[str, str]] = {
     "langgraph": {
         "module": "langgraph",
         "install": "pip install -U langgraph",
-        "use_for": "动态任务图、状态机、human-in-the-loop、长任务恢复。",
+        "use_for": "用于任务图、状态机、人工确认节点和长任务恢复。",
     },
     "openai-agents": {
         "module": "agents",
         "install": "pip install openai-agents",
-        "use_for": "handoff、MCP、tracing、guardrails 和轻量 agent 协议层。",
+        "use_for": "用于 handoff、MCP、tracing、guardrails 和轻量 agent 协作层。",
     },
     "openhands-sdk": {
         "module": "openhands.sdk",
         "install": "pip install openhands-sdk",
-        "use_for": "把成熟软件工程 agent 作为 worker 接入，后续可接 agent-server/REST。",
+        "use_for": "用于把成熟的软件工程 agent 作为 worker 接入，后续可扩展到 agent-server 或 REST。",
     },
     "openhands-agent-server": {
         "module": "openhands.agent_server",
         "install": "pip install openhands-sdk",
-        "use_for": "本地/远程 agent server，供前端或远程 worker 复用。",
+        "use_for": "用于本地或远程 agent server，方便前端或远程 worker 复用。",
     },
 }
 
@@ -42,13 +42,13 @@ OPTIONAL_CLIS: Dict[str, Dict[str, str]] = {
     "aider": {
         "command": "aider",
         "install": "pip install aider-chat",
-        "use_for": "单仓库代码修改 worker，可作为 coder runner。",
+        "use_for": "用于单仓库代码修改型 worker，可作为 coder runner。",
     },
     "swe-agent": {
         "command": "sweagent",
         "alt_command": "swe-agent",
         "install": "pip install sweagent",
-        "use_for": "GitHub issue / bugfix 型专项 worker。",
+        "use_for": "用于 GitHub issue 或 bugfix 类型的专用 worker。",
     },
 }
 
@@ -123,8 +123,8 @@ def _run_langgraph_spike(goal: str) -> str:
         return {
             "steps": [
                 "master 生成结构化任务图",
-                "worker 在独立 worktree 执行",
-                "reviewer 审核并触发返工或等待用户确认",
+                "worker 在独立 worktree 中执行",
+                "reviewer 审核并触发返工，或等待用户确认",
             ],
             "status": "planned",
         }
@@ -158,14 +158,14 @@ def _run_openai_agents_spike(goal: str) -> str:
         name="agentsCluster master spike",
         instructions=(
             "你是 agentsCluster 的总控验证 agent。"
-            "本 spike 只验证 SDK 可导入和 agent 对象可构造，不调用模型。"
+            "这个 spike 只验证 SDK 可导入、agent 对象可构造，不调用模型。"
         ),
     )
     return (
         "OpenAI Agents SDK spike ok.\n"
         f"agent: {agent.name}\n"
         f"goal: {goal}\n"
-        "next: 可用 handoffs/MCP/tracing 替换 agentsCluster 的内部 agent 协议层。"
+        "next: 可以用 handoffs / MCP / tracing 替换 agentsCluster 的内部 agent 协议层。"
     )
 
 
@@ -180,5 +180,5 @@ def _run_openhands_spike(goal: str) -> str:
         "OpenHands SDK spike ok.\n"
         f"openhands.sdk version: {version}\n"
         f"goal: {goal}\n"
-        "next: 新增 openhands runner，在 agentsCluster worktree 内启动 SDK/agent-server worker。"
+        "next: 新增 openhands runner，在 agentsCluster worktree 内启动 SDK 或 agent-server worker。"
     )

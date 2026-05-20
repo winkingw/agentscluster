@@ -26,7 +26,10 @@ def load_config(path: Path = CONFIG_PATH) -> Dict[str, Any]:
     data = simple_yaml.load(path)
     if not isinstance(data, dict):
         raise ValueError(f"Config root must be a map: {path}")
-    data.setdefault("settings", {})
+    settings = data.setdefault("settings", {})
+    if isinstance(settings, dict):
+        settings.setdefault("orchestrator", "langgraph")
+        settings.setdefault("integration_strategy", "adapter")
     data.setdefault("agents", {})
     data.setdefault("projects", [])
     return data

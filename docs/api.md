@@ -113,6 +113,62 @@ agentsCluster apply <run_id> --mode discard
 }
 ```
 
+### GET /api/config
+
+返回当前全局配置：
+
+```json
+{
+  "config": {
+    "settings": {},
+    "agents": {},
+    "projects": []
+  }
+}
+```
+
+### PUT /api/config
+
+保存全局配置，支持直接提交整个 `config` 对象：
+
+```json
+{
+  "config": {
+    "settings": {
+      "orchestrator": "builtin"
+    },
+    "agents": {},
+    "projects": []
+  }
+}
+```
+
+### GET /api/env
+
+返回当前 `.env` 键值对：
+
+```json
+{
+  "env": {
+    "OPENAI_API_KEY": "sk-...",
+    "OPENAI_BASE_URL": "https://..."
+  }
+}
+```
+
+### PUT /api/env
+
+保存 `.env`。未提交的键会从文件和当前进程环境中删除：
+
+```json
+{
+  "env": {
+    "OPENAI_API_KEY": "sk-...",
+    "OPENAI_BASE_URL": "https://..."
+  }
+}
+```
+
 ### GET /api/projects
 
 返回已注册项目：

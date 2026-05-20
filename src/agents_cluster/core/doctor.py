@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List
 
 from .config import get_agent, load_config
@@ -21,7 +22,7 @@ class Check:
     hint: str = ""
 
 
-def run_doctor() -> int:
+def collect_doctor_checks() -> List[Check]:
     load_dotenv(ENV_PATH)
     checks: List[Check] = []
     checks.extend(_path_checks())
@@ -29,6 +30,11 @@ def run_doctor() -> int:
     checks.extend(_config_checks())
     checks.extend(_integration_checks())
     checks.extend(_mcp_checks())
+    return checks
+
+
+def run_doctor() -> int:
+    checks = collect_doctor_checks()
 
     print("agentsCluster doctor")
     print("")
@@ -123,9 +129,20 @@ def _agent_env_names(raw: Dict) -> List[str]:
 
 
 def _mcp_checks() -> List[Check]:
+    checks: List[Check] = []
+    agent_kit_mcp_root = Path(os.environ.get("AGENT_KIT_MCP_ROOT", r"D:\programs\agent-kit\mcp"))
+    checks.append(
+        Check(
+            "agent-kit mcp root",
+            agent_kit_mcp_root.exists(),
+            str(agent_kit_mcp_root),
+            "Set AGENT_KIT_MCP_ROOT to D:\\programs\\agent-kit\\mcp if your MCP registry lives there.",
+        )
+    )
     codex = shutil.which("codex")
     if not codex:
-        return [Check("codex mcp", False, "codex not found")]
+        checks.append(Check("codex mcp", False, "codex not found"))
+        return checks
     if os.name == "nt" and codex.lower().endswith((".cmd", ".bat")):
         command = ["cmd.exe", "/c", codex, "mcp", "list"]
     else:
@@ -141,14 +158,17 @@ def _mcp_checks() -> List[Check]:
             timeout=20,
         )
     except Exception as exc:
-        return [Check("codex mcp", False, str(exc))]
+        checks.append(Check("codex mcp", False, str(exc)))
+        return checks
 
     if proc.returncode != 0:
-        return [Check("codex mcp", False, proc.stderr.strip() or proc.stdout.strip())]
+        checks.append(Check("codex mcp", False, proc.stderr.strip() or proc.stdout.strip()))
+        return checks
 
     names = _mcp_names(proc.stdout)
     detail = ", ".join(names) if names else "no MCP servers listed"
-    return [Check("codex mcp", True, detail)]
+    checks.append(Check("codex mcp", True, detail))
+    return checks
 
 
 def _integration_checks() -> List[Check]:

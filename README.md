@@ -30,6 +30,13 @@
 
 ```powershell
 cd D:\programs\agentsCluster
+.\scripts\install.ps1
+```
+
+或手动安装：
+
+```powershell
+cd D:\programs\agentsCluster
 conda env create -f environment.yml
 conda activate agentsCluster
 pip install -e .
@@ -167,6 +174,20 @@ agentsCluster serve --host 127.0.0.1 --port 8765
 http://127.0.0.1:8765
 ```
 
+## 本地工作台
+
+启动本地服务后，直接打开：
+```text
+http://127.0.0.1:8765/
+```
+
+工作台提供：
+- 项目注册与删除
+- run 创建、状态、时间线、产物预览
+- approve / merge / discard
+- 全局配置编辑
+- `.env` 编辑
+
 详细接口见：
 
 [`docs/api.md`](D:/programs/agentsCluster/docs/api.md)
@@ -211,6 +232,9 @@ agentsCluster integrations spike openhands
 建议至少运行：
 
 ```powershell
+.\scripts\run_tests.ps1
+
+# 或手动运行：
 conda run -n agentsCluster python -m compileall src tests
 conda run -n agentsCluster python -m pip check
 conda run -n agentsCluster python tests\smoke.py

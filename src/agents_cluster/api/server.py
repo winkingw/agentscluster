@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import mimetypes
 import json
+import os
+import shutil
+import subprocess
 import sys
 import time
 from contextlib import redirect_stderr, redirect_stdout
@@ -13,7 +17,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from agents_cluster.core import db
 from agents_cluster.core.config import add_project, find_project, get_agent, list_projects, load_config, remove_project, save_config
-from agents_cluster.core.paths import PATCHES_DIR, RUNS_DIR
+from agents_cluster.core.doctor import collect_doctor_checks
+from agents_cluster.core.env import read_dotenv, write_dotenv
+from agents_cluster.core.integrations import list_integrations
+from agents_cluster.core.paths import ENV_PATH, PATCHES_DIR, RUNS_DIR
+from agents_cluster.core.paths import UI_DIR, UI_DIST_DIR
 from agents_cluster.core.time import now_iso
 from agents_cluster.orchestrator.agent_test import test_agent
 from agents_cluster.orchestrator.controller import create_run
@@ -38,6 +46,7 @@ class AgentsClusterHTTPServer(ThreadingHTTPServer):
 
 def create_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
     db.init_db()
+    _ensure_ui_dist()
     recovered = RUN_QUEUE.recover_stale_runs()
     server = AgentsClusterHTTPServer((host, port), AgentsClusterHandler)
     server.agentscluster_recovered = recovered  # type: ignore[attr-defined]
@@ -69,6 +78,45 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         if route == "/health":
             self._send_json({"ok": True, "service": "agentsCluster"})
             return
+        if route == "/api/config":
+            self._send_json({"config": load_config()})
+            return
+        if route == "/api/env":
+            self._send_json({"env": read_dotenv(ENV_PATH)})
+            return
+        if route == "/api/doctor":
+            checks = collect_doctor_checks()
+            failed = [check.name for check in checks if not check.ok]
+            self._send_json(
+                {
+                    "checks": [
+                        {"name": check.name, "ok": check.ok, "detail": check.detail, "hint": check.hint}
+                        for check in checks
+                    ],
+                    "summary": {
+                        "total": len(checks),
+                        "failed": len(failed),
+                        "passed": len(checks) - len(failed),
+                    },
+                }
+            )
+            return
+        if route == "/api/integrations":
+            self._send_json(
+                {
+                    "integrations": [
+                        {
+                            "name": status.name,
+                            "installed": status.installed,
+                            "detail": status.detail,
+                            "install_hint": status.install_hint,
+                            "use_for": status.use_for,
+                        }
+                        for status in list_integrations()
+                    ]
+                }
+            )
+            return
         if route == "/api/projects":
             config = load_config()
             self._send_json({"projects": list_projects(config)})
@@ -97,6 +145,9 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
             if not run:
                 self._send_error(HTTPStatus.NOT_FOUND, f"Run not found: {run_id}")
                 return
+            if not action:
+                self._send_json({"run": run, "events": db.list_events(run_id), "artifacts": _list_run_artifacts(run_id)})
+                return
             if action == "events/stream":
                 self._handle_event_stream(run_id, query, run=run)
                 return
@@ -118,7 +169,7 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
             if action:
                 self._send_error(HTTPStatus.NOT_FOUND, f"Unknown run action: {action}")
                 return
-            self._send_json({"run": run, "events": db.list_events(run_id)})
+        if self._handle_frontend(route):
             return
         self._send_error(HTTPStatus.NOT_FOUND, f"Unknown endpoint: {route}")
 
@@ -137,6 +188,12 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
             project = add_project(config, Path(str(path)), body.get("name"))
             save_config(config)
             self._send_json({"project": project}, HTTPStatus.CREATED)
+            return
+        if route == "/api/config":
+            self._handle_update_config()
+            return
+        if route == "/api/env":
+            self._handle_update_env()
             return
         if route == "/api/runs":
             self._handle_create_run()
@@ -189,6 +246,16 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
             return
         self._send_error(HTTPStatus.NOT_FOUND, f"Unknown endpoint: {route}")
 
+    def do_PUT(self) -> None:
+        route, _query = self._route()
+        if route == "/api/config":
+            self._handle_update_config()
+            return
+        if route == "/api/env":
+            self._handle_update_env()
+            return
+        self._send_error(HTTPStatus.NOT_FOUND, f"Unknown endpoint: {route}")
+
     def do_DELETE(self) -> None:
         route, _query = self._route()
         if route.startswith("/api/projects/"):
@@ -232,7 +299,7 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
         self.wfile.write(body)
@@ -255,6 +322,42 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
 
     def _send_error(self, status: HTTPStatus, message: str) -> None:
         self._send_json({"error": message}, status)
+
+    def _handle_frontend(self, route: str) -> bool:
+        if route.startswith("/api/") or route == "/health":
+            return False
+        frontend_root = UI_DIST_DIR if (UI_DIST_DIR / "index.html").exists() else UI_DIR
+        target = frontend_root / "index.html" if route in {"/", "/index.html"} else (frontend_root / route.lstrip("/"))
+        try:
+            resolved = target.resolve()
+            ui_root = frontend_root.resolve()
+        except Exception:
+            resolved = target
+            ui_root = frontend_root
+        if ui_root not in resolved.parents and resolved != ui_root:
+            self._send_error(HTTPStatus.BAD_REQUEST, "Invalid frontend path")
+            return True
+        if not resolved.exists() or not resolved.is_file():
+            if "." not in Path(route).name:
+                index_path = frontend_root / "index.html"
+                if index_path.exists():
+                    self._send_file(index_path)
+                    return True
+            self._send_error(HTTPStatus.NOT_FOUND, f"Frontend asset not found: {route}")
+            return True
+        self._send_file(resolved)
+        return True
+
+    def _send_file(self, path: Path) -> None:
+        data = path.read_bytes()
+        mime, _encoding = mimetypes.guess_type(str(path))
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", mime or "application/octet-stream")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(data)
 
     def _handle_agent_test(self, agent_name: str) -> None:
         try:
@@ -288,6 +391,40 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
             self._send_error(HTTPStatus.NOT_FOUND, str(exc))
         except ValueError:
             return
+        except Exception as exc:
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+
+    def _handle_update_config(self) -> None:
+        try:
+            body = self._read_json()
+        except ValueError:
+            return
+        config = body.get("config", body)
+        if not isinstance(config, dict):
+            self._send_error(HTTPStatus.BAD_REQUEST, "Field 'config' must be an object")
+            return
+        config.setdefault("settings", {})
+        config.setdefault("agents", {})
+        config.setdefault("projects", [])
+        try:
+            save_config(config)
+            self._send_json({"config": config})
+        except Exception as exc:
+            self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+
+    def _handle_update_env(self) -> None:
+        try:
+            body = self._read_json()
+        except ValueError:
+            return
+        env = body.get("env", body)
+        if not isinstance(env, dict):
+            self._send_error(HTTPStatus.BAD_REQUEST, "Field 'env' must be an object")
+            return
+        normalized = {str(key): "" if value is None else str(value) for key, value in env.items() if str(key).strip()}
+        try:
+            write_dotenv(normalized, ENV_PATH, apply_to_process=True)
+            self._send_json({"env": read_dotenv(ENV_PATH)})
         except Exception as exc:
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
 
@@ -514,15 +651,7 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
         if not run_dir.exists():
             self._send_error(HTTPStatus.NOT_FOUND, f"Run directory not found: {run_dir}")
             return
-        items = []
-        for path in sorted(run_dir.rglob("*")):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(run_dir).as_posix()
-            # Keep the list reasonable; large raw logs can still be fetched explicitly.
-            size = path.stat().st_size
-            items.append({"name": rel, "bytes": int(size)})
-        self._send_json({"run_id": run_id, "artifacts": items})
+        self._send_json({"run_id": run_id, "artifacts": _list_run_artifacts(run_id)})
 
     def _handle_artifact_get(self, run_id: str, rel: str) -> None:
         if not rel or rel.startswith(("/", "\\")) or ".." in rel.replace("\\", "/").split("/"):
@@ -750,3 +879,43 @@ def _agent_summaries(config: Dict[str, Any]) -> list:
             }
         )
     return summaries
+
+
+def _list_run_artifacts(run_id: str) -> list:
+    run_dir = RUNS_DIR / run_id
+    if not run_dir.exists():
+        return []
+    items = []
+    for path in sorted(run_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(run_dir).as_posix()
+        items.append({"name": rel, "bytes": int(path.stat().st_size)})
+    return items
+
+
+def _ensure_ui_dist() -> None:
+    if (UI_DIST_DIR / "index.html").exists():
+        return
+    if not UI_DIR.exists():
+        return
+    npm = shutil.which("npm")
+    if not npm:
+        raise RuntimeError(
+            "UI dist is missing and npm was not found. Run `cd ui && npm install && npm run build`."
+        )
+    if os.name == "nt" and npm.lower().endswith((".cmd", ".bat")):
+        command = ["cmd.exe", "/c", npm, "run", "build"]
+    else:
+        command = [npm, "run", "build"]
+    proc = subprocess.run(
+        command,
+        cwd=str(UI_DIR),
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or "UI build failed")

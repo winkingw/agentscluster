@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install langgraph openai-agents
+
+      - name: Build UI
+        run: |
+          cd ui
+          npm ci
+          npm run build
+
+      - name: Static checks
+        run: |
+          python -m compileall -q src tests
+          python -m pip check
+
+      - name: Smoke tests
+        run: |
+          python tests/smoke.py
+          python tests/langgraph_smoke.py
+          python tests/integration_smoke.py
+          python tests/api_smoke.py
+

@@ -15,7 +15,7 @@ from agents_cluster.workspace.manager import prepare_worktree
 
 from .prompts import agent_capability_hint, master_plan_prompt, master_summary_prompt, review_prompt, worker_prompt
 from .task_protocol import build_task_plan, write_agent_result, write_task_plan
-from .langgraph_controller import plan_with_langgraph
+from .langgraph_controller import execute_with_langgraph, plan_with_langgraph
 
 
 DEFAULT_WORKERS = ["architect", "coder", "tester"]
@@ -184,11 +184,27 @@ def execute_run(
     plan = plan_path.read_text(encoding="utf-8")
     task_plan = _load_task_plan(task_plan_path)
     worker_names = [str(task.get("agent")) for task in task_plan.get("tasks", []) if str(task.get("agent", "")).strip()]
+    orchestrator = str(metadata.get("orchestrator") or _orchestrator_name(config))
 
     try:
         _ensure_not_cancelled(run_id, cancel_check)
         db.update_run(run_id, status="running")
         db.add_event(run_id, now_iso(), "system", "execution_started", "worker execution started")
+        if orchestrator == "langgraph":
+            result = _execute_run_with_langgraph(
+                config=config,
+                run_id=run_id,
+                run_dir=run_dir,
+                outputs_dir=outputs_dir,
+                worktree_path=worktree_path,
+                goal=goal,
+                plan=plan,
+                task_plan=task_plan,
+                max_rework_rounds=max_rework_rounds,
+                cancel_check=cancel_check,
+            )
+            return result
+
         worker_log_parts: List[str] = []
         previous_output = ""
         for index, worker_name in enumerate(worker_names):
@@ -340,6 +356,185 @@ def execute_run(
         raise
 
 
+def _execute_run_with_langgraph(
+    *,
+    config: Dict,
+    run_id: str,
+    run_dir: Path,
+    outputs_dir: Path,
+    worktree_path: Path,
+    goal: str,
+    plan: str,
+    task_plan: Dict,
+    max_rework_rounds: int,
+    cancel_check: Optional[Callable[[], bool]] = None,
+) -> Dict:
+    tasks = task_plan.get("tasks", []) if isinstance(task_plan, dict) else []
+    include_tester_rework = "tester" in config.get("agents", {})
+
+    def run_worker(agent_name: str, task_id: str, previous_output: str) -> str:
+        _ensure_not_cancelled(run_id, cancel_check)
+        print(f"\nRunning worker: {agent_name}")
+        db.add_event(run_id, now_iso(), agent_name, "task_started", f"started {task_id}", {"task_id": task_id})
+        output_dir = outputs_dir / "workers" / (task_id or agent_name)
+        output = _run_agent(
+            config,
+            agent_name,
+            worker_prompt(
+                agent_name,
+                worktree_path,
+                goal,
+                plan,
+                previous_output,
+                _capability_hint(config, agent_name),
+            ),
+            worktree_path,
+            output_dir,
+        )
+        write_agent_result(output_dir, agent_name, output, "completed", task_id=task_id)
+        db.add_event(run_id, now_iso(), agent_name, "task_completed", f"completed {task_id}", {"task_id": task_id})
+        return output
+
+    def run_reviewer(review_round: int, diff_text: str, status_text: str) -> str:
+        _ensure_not_cancelled(run_id, cancel_check)
+        print("\nRunning reviewer.")
+        output = _run_agent(
+            config,
+            "reviewer",
+            review_prompt(
+                worktree_path,
+                goal,
+                plan,
+                _cap(diff_text),
+                status_text,
+                _capability_hint(config, "reviewer"),
+            ),
+            worktree_path,
+            outputs_dir / "review" / f"round_{review_round}",
+        )
+        write_agent_result(
+            outputs_dir / "review" / f"round_{review_round}",
+            "reviewer",
+            output,
+            "request_changes" if _review_requests_changes(output) else "approved",
+        )
+        return output
+
+    def run_rework(review_round: int, review: str) -> str:
+        _ensure_not_cancelled(run_id, cancel_check)
+        print(f"\nReviewer requested changes; running rework round {review_round}.")
+        output = _run_agent(
+            config,
+            "coder",
+            worker_prompt(
+                "coder",
+                worktree_path,
+                goal,
+                plan,
+                f"Reviewer requested changes:\n{review}",
+                _capability_hint(config, "coder"),
+            ),
+            worktree_path,
+            outputs_dir / "rework" / f"round_{review_round}",
+        )
+        write_agent_result(
+            outputs_dir / "rework" / f"round_{review_round}",
+            "coder",
+            output,
+            "completed",
+            task_id=f"rework_{review_round}",
+        )
+        return output
+
+    def run_tester_rework(review_round: int, review: str) -> Optional[str]:
+        if not include_tester_rework:
+            return None
+        _ensure_not_cancelled(run_id, cancel_check)
+        output = _run_agent(
+            config,
+            "tester",
+            worker_prompt(
+                "tester",
+                worktree_path,
+                goal,
+                plan,
+                f"Rework was applied after reviewer feedback:\n{review}",
+                _capability_hint(config, "tester"),
+            ),
+            worktree_path,
+            outputs_dir / "rework" / f"round_{review_round}_tester",
+        )
+        write_agent_result(
+            outputs_dir / "rework" / f"round_{review_round}_tester",
+            "tester",
+            output,
+            "completed",
+            task_id=f"rework_{review_round}_tester",
+        )
+        return output
+
+    def summarize(worker_log: str, review: str, diff_text: str, status_text: str) -> str:
+        _ensure_not_cancelled(run_id, cancel_check)
+        print("\nRunning master final summary.")
+        return _run_agent(
+            config,
+            "master",
+            master_summary_prompt(
+                worktree_path,
+                goal,
+                plan,
+                _cap(worker_log),
+                review,
+                _cap(diff_text),
+                status_text,
+                _capability_hint(config, "master"),
+            ),
+            worktree_path,
+            outputs_dir / "final",
+        )
+
+    def refresh_repo_state() -> tuple[str, str]:
+        return git_ops.status(worktree_path), git_ops.diff(worktree_path)
+
+    result = execute_with_langgraph(
+        goal=goal,
+        plan=plan,
+        worktree_path=worktree_path,
+        task_plan=task_plan,
+        max_rework_rounds=max_rework_rounds,
+        include_tester_rework=include_tester_rework,
+        run_worker=run_worker,
+        run_reviewer=run_reviewer,
+        run_rework=run_rework,
+        run_tester_rework=run_tester_rework,
+        summarize=summarize,
+        refresh_repo_state=refresh_repo_state,
+        review_requests_changes=_review_requests_changes,
+    )
+
+    worker_log = "\n\n".join(result.get("worker_log_parts", []) or [])
+    review = str(result.get("review") or "")
+    summary = str(result.get("summary") or "")
+    status_text = str(result.get("status_text") or "")
+    diff_text = str(result.get("diff_text") or "")
+    review_round = int(result.get("review_round") or 0)
+
+    if worker_log:
+        (run_dir / "worker-log.md").write_text(worker_log, encoding="utf-8")
+    if review:
+        review_name = "review.md" if review_round <= 0 else f"review-round-{review_round}.md"
+        (run_dir / review_name).write_text(review, encoding="utf-8")
+    (run_dir / "status.txt").write_text(status_text, encoding="utf-8")
+    (run_dir / "diff.patch").write_text(diff_text, encoding="utf-8")
+    if summary:
+        (run_dir / "summary.md").write_text(summary, encoding="utf-8")
+        write_agent_result(outputs_dir / "final", "master", summary, "completed")
+
+    db.update_run(run_id, status="reviewed", summary=summary)
+    db.add_event(run_id, now_iso(), "master", "execution_completed", "run reviewed")
+    return {"id": run_id, "status": "reviewed", "summary": summary, "run_dir": str(run_dir)}
+
+
 def _run_agent(config: Dict, agent_name: str, prompt: str, cwd: Path, output_dir: Path) -> str:
     agent_config = get_agent(config, agent_name)
     runner = create_runner(agent_config)
@@ -379,8 +574,8 @@ def _max_rework_rounds(config: Dict, override: Optional[int]) -> int:
 
 def _orchestrator_name(config: Dict) -> str:
     settings = config.get("settings", {}) or {}
-    orchestrator = settings.get("orchestrator", "builtin")
-    return str(orchestrator).strip().lower() or "builtin"
+    orchestrator = settings.get("orchestrator", "langgraph")
+    return str(orchestrator).strip().lower() or "langgraph"
 
 
 def _review_requests_changes(review: str) -> bool:

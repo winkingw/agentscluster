@@ -13,7 +13,7 @@ def main() -> None:
         plan_agent=lambda goal, worktree: f"Plan for {goal} in {worktree}",
     )
     assert result["plan"].startswith("Plan for 验证 LangGraph")
-    assert result["task_plan"]["mode"] == "builtin-sequential"
+    assert result["task_plan"]["mode"] == "langgraph-sequential"
     assert [task["agent"] for task in result["task_plan"]["tasks"]] == ["architect", "coder", "tester"]
     print("langgraph smoke ok")
 

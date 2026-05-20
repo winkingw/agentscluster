@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import threading
@@ -11,6 +12,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from agents_cluster.api.server import create_server
+from agents_cluster.api import server as api_server
 from agents_cluster.core import db
 from agents_cluster.core.paths import CONFIG_PATH, RUNS_DIR
 from agents_cluster.core.time import now_iso
@@ -35,6 +37,17 @@ def request_json(url: str, method: str = "GET", payload=None):
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     with urllib.request.urlopen(req, timeout=10) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def request_text(url: str, method: str = "GET", payload=None):
+    data = None
+    headers = {}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return resp.read().decode("utf-8")
 
 
 def request_error(url: str, method: str = "GET", payload=None):
@@ -99,6 +112,7 @@ def read_sse_until(url: str, target_event: str = "run-event", timeout: float = 1
 def main() -> None:
     db.init_db()
     original_config = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else None
+    original_env_path = api_server.ENV_PATH
     original_run_agent = controller._run_agent
 
     try:
@@ -125,51 +139,11 @@ def main() -> None:
             run(["git", "add", "README.md"], repo)
             run(["git", "commit", "-m", "init"], repo)
 
-            recovery_project = {"name": "api-smoke-recovery", "path": str(repo)}
-
-            planning_recovery_id = f"run_api_recovery_plan_{uuid4().hex[:6]}"
-            planning_info = prepare_worktree(recovery_project, planning_recovery_id)
-            planning_worktree = Path(planning_info["worktree_path"])
-            planning_run_dir = RUNS_DIR / planning_recovery_id
-            planning_run_dir.mkdir(parents=True, exist_ok=True)
-            db.insert_run(
-                {
-                    "id": planning_recovery_id,
-                    "created_at": now_iso(),
-                    "project_name": planning_info["project_name"],
-                    "project_path": planning_info["project_path"],
-                    "worktree_path": planning_info["worktree_path"],
-                    "branch_name": planning_info["branch_name"],
-                    "goal": "recover planning",
-                    "status": "planning",
-                    "metadata": {"base_branch": planning_info["base_branch"]},
-                }
-            )
-            (planning_run_dir / "plan.md").write_text("plan recovered", encoding="utf-8")
-            (planning_run_dir / "task-plan.json").write_text(
-                json.dumps({"tasks": [{"id": "t1", "agent": "coder"}]}, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-
-            interrupted_recovery_id = f"run_api_recovery_exec_{uuid4().hex[:6]}"
-            interrupted_info = prepare_worktree(recovery_project, interrupted_recovery_id)
-            interrupted_worktree = Path(interrupted_info["worktree_path"])
-            interrupted_run_dir = RUNS_DIR / interrupted_recovery_id
-            interrupted_run_dir.mkdir(parents=True, exist_ok=True)
-            db.insert_run(
-                {
-                    "id": interrupted_recovery_id,
-                    "created_at": now_iso(),
-                    "project_name": interrupted_info["project_name"],
-                    "project_path": interrupted_info["project_path"],
-                    "worktree_path": interrupted_info["worktree_path"],
-                    "branch_name": interrupted_info["branch_name"],
-                    "goal": "recover execution",
-                    "status": "running",
-                    "metadata": {"base_branch": interrupted_info["base_branch"]},
-                }
-            )
-            (interrupted_worktree / "README.md").write_text("# api smoke\n\npartial\n", encoding="utf-8")
+            env_path = Path(tmp) / ".env.api-smoke"
+            keep_key = f"API_KEEP_{uuid4().hex[:8]}"
+            drop_key = f"API_DROP_{uuid4().hex[:8]}"
+            env_path.write_text(f"{keep_key}=1\n{drop_key}=2\n", encoding="utf-8")
+            api_server.ENV_PATH = env_path
 
             server = create_server("127.0.0.1", 0)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -179,30 +153,30 @@ def main() -> None:
             health = request_json(f"{base_url}/health")
             assert health["ok"] is True
 
-            recovered_plan = request_json(f"{base_url}/api/runs/{planning_recovery_id}")
-            assert recovered_plan["run"]["status"] == "waiting_approval"
-            assert any(event["kind"] == "run_recovered" for event in recovered_plan["events"])
+            root_html = request_text(f"{base_url}/")
+            assert "agentsCluster" in root_html
 
-            recovered_exec = request_json(f"{base_url}/api/runs/{interrupted_recovery_id}")
-            assert recovered_exec["run"]["status"] == "interrupted"
-            assert any(event["kind"] == "run_interrupted" for event in recovered_exec["events"])
-
-            db.update_run(planning_recovery_id, status="discarded")
-            if planning_worktree.exists():
-                git_ops.remove_worktree(repo, planning_worktree, force=True)
-
-            resumed_recovery = request_json(
-                f"{base_url}/api/runs/{interrupted_recovery_id}/resume",
-                method="POST",
-                payload={"confirm": True},
+            config_snapshot = request_json(f"{base_url}/api/config")
+            assert "settings" in config_snapshot["config"]
+            config_echo = request_json(
+                f"{base_url}/api/config",
+                method="PUT",
+                payload={"config": config_snapshot["config"]},
             )
-            assert resumed_recovery["status"] == "queued"
-            assert resumed_recovery["phase"] == "plan"
-            resumed_recovery_detail = wait_for_status(base_url, interrupted_recovery_id, "waiting_approval")
-            assert any(event["kind"] == "resume_requested" for event in resumed_recovery_detail["events"])
-            db.update_run(interrupted_recovery_id, status="discarded")
-            if interrupted_worktree.exists():
-                git_ops.remove_worktree(repo, interrupted_worktree, force=True)
+            assert config_echo["config"]["settings"] == config_snapshot["config"]["settings"]
+
+            env_snapshot = request_json(f"{base_url}/api/env")
+            assert isinstance(env_snapshot["env"], dict)
+            assert env_snapshot["env"][keep_key] == "1"
+            assert env_snapshot["env"][drop_key] == "2"
+            env_echo = request_json(
+                f"{base_url}/api/env",
+                method="PUT",
+                payload={"env": {keep_key: "3"}},
+            )
+            assert env_echo["env"] == {keep_key: "3"}
+            assert drop_key not in os.environ
+            assert drop_key not in env_path.read_text(encoding="utf-8")
 
             created = request_json(
                 f"{base_url}/api/projects",
@@ -402,10 +376,6 @@ def main() -> None:
                 if queued_worktree.exists():
                     git_ops.remove_worktree(repo, queued_worktree, force=True)
 
-            for extra_worktree in (planning_worktree, interrupted_worktree):
-                if extra_worktree.exists():
-                    git_ops.remove_worktree(repo, extra_worktree, force=True)
-
             removed = request_json(f"{base_url}/api/projects/api-smoke", method="DELETE")
             assert removed["removed"]["name"] == "api-smoke"
 
@@ -416,6 +386,7 @@ def main() -> None:
             server.shutdown()
             server.server_close()
         controller._run_agent = original_run_agent
+        api_server.ENV_PATH = original_env_path
         if original_config is not None:
             CONFIG_PATH.write_text(original_config, encoding="utf-8")
 

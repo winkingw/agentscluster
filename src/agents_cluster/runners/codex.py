@@ -27,5 +27,31 @@ class CodexRunner(SubprocessAgentRunner):
             command.append("--skip-git-repo-check")
         if raw.get("ephemeral", True):
             command.append("--ephemeral")
+        last_message_path = output_dir / f"{self.config.name}.last_message.txt"
+        command.extend(["-o", str(last_message_path)])
         command.append("-")
-        return self._run_command(command, prompt, cwd, output_dir)
+        result = self._run_command(command, prompt, cwd, output_dir)
+
+        if last_message_path.exists():
+            message = last_message_path.read_text(encoding="utf-8", errors="replace").strip()
+            if message:
+                result.stdout = message
+                result.output_file.write_text(
+                    "\n".join(
+                        [
+                            f"# Agent: {result.agent}",
+                            f"# Command: {' '.join(result.command)}",
+                            f"# CWD: {result.cwd}",
+                            f"# Return code: {result.returncode}",
+                            "",
+                            "## STDOUT",
+                            result.stdout,
+                            "",
+                            "## STDERR",
+                            result.stderr,
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+
+        return result

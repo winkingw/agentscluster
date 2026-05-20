@@ -1,5 +1,5 @@
-# agentsCluster 示例配置。
-# 这个文件可以提交到 GitHub；真实配置请放在 config/agents.yaml。
+# agentsCluster 示例配置
+# 真正使用时请复制为 config/agents.yaml
 
 settings:
   cluster_root: D:\programs\agentsCluster
@@ -8,9 +8,7 @@ settings:
   patches_dir: patches
   default_timeout_seconds: 1800
   max_rework_rounds: 1
-  # 当前默认仍使用 agentsCluster 内置顺序流程。
-  # 后续可切换为 langgraph 或 openai_agents；未实现完全替换前会自动回退 builtin。
-  orchestrator: builtin
+  orchestrator: langgraph
   integration_strategy: adapter
 
 agents:
@@ -56,6 +54,7 @@ agents:
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
     claude:
       output_format: text
+      permission_mode: acceptEdits
 
   coder:
     runner: claude
@@ -69,6 +68,7 @@ agents:
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
     claude:
       output_format: text
+      permission_mode: acceptEdits
 
   tester:
     runner: claude
@@ -82,6 +82,7 @@ agents:
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL}
     claude:
       output_format: text
+      permission_mode: acceptEdits
 
   cheap_worker:
     runner: direct_llm
