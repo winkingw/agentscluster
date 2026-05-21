@@ -58,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     init_cmd.set_defaults(func=cmd_init)
 
     doctor_cmd = sub.add_parser("doctor", help="Check environment, tools, config, keys, and MCP.")
+    doctor_cmd.add_argument("--strict", action="store_true", help="Exit with non-zero status if any check fails.")
     doctor_cmd.set_defaults(func=cmd_doctor)
 
     integrations_cmd = sub.add_parser("integrations", help="Inspect optional orchestration/worker integrations.")
@@ -180,7 +181,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 
 def cmd_doctor(args: argparse.Namespace) -> None:
-    raise SystemExit(run_doctor())
+    raise SystemExit(run_doctor(strict=bool(getattr(args, "strict", False))))
 
 
 def cmd_integrations_list(args: argparse.Namespace) -> None:

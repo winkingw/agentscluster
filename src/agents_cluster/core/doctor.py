@@ -34,7 +34,7 @@ def collect_doctor_checks() -> List[Check]:
     return checks
 
 
-def run_doctor() -> int:
+def run_doctor(strict: bool = False) -> int:
     checks = collect_doctor_checks()
 
     print("agentsCluster doctor")
@@ -48,7 +48,11 @@ def run_doctor() -> int:
     failed = [check for check in checks if not check.ok]
     print("")
     print(f"Result: {len(checks) - len(failed)} passed, {len(failed)} failed.")
-    return 0 if not failed else 1
+    if strict:
+        return 0 if not failed else 1
+    # Default to exit-code 0 to avoid confusing `conda run ...` wrappers which
+    # print a scary "conda run ... failed" prefix for non-zero exits.
+    return 0
 
 
 def _path_checks() -> List[Check]:
