@@ -720,7 +720,25 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
             if mode == "patch":
                 patch_path = PATCHES_DIR / f"{run_id}.patch"
                 git_ops.write_patch(worktree_path, patch_path)
-                self._send_json({"run_id": run_id, "mode": mode, "patch_path": str(patch_path)})
+                # Also store inside the run directory so the UI can fetch it via /artifacts/.
+                artifact_name = "changes.patch"
+                try:
+                    run_dir = RUNS_DIR / run_id
+                    run_dir.mkdir(parents=True, exist_ok=True)
+                    (run_dir / artifact_name).write_text(
+                        patch_path.read_text(encoding="utf-8", errors="replace"),
+                        encoding="utf-8",
+                    )
+                except Exception:
+                    artifact_name = ""
+                self._send_json(
+                    {
+                        "run_id": run_id,
+                        "mode": mode,
+                        "patch_path": str(patch_path),
+                        "artifact_name": artifact_name,
+                    }
+                )
                 return
             if mode == "merge":
                 metadata = run.get("metadata", {}) or {}

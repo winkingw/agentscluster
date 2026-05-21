@@ -687,6 +687,13 @@ def apply_run(run_id: str, mode: Optional[str] = None) -> None:
     if mode == "patch":
         patch_path = PATCHES_DIR / f"{run_id}.patch"
         git_ops.write_patch(worktree_path, patch_path)
+        # Also store the patch inside the run directory so it can be served as an artifact.
+        try:
+            run_dir = _run_dir(run_id)
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "changes.patch").write_text(patch_path.read_text(encoding="utf-8", errors="replace"), encoding="utf-8")
+        except Exception:
+            pass
         print(f"Patch written: {patch_path}")
         return
 

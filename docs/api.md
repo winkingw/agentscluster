@@ -500,7 +500,7 @@ GET /api/runs/{run_id}/artifacts/agent_outputs/final/master.result.json
 支持：
 
 - `diff`：只返回 diff
-- `patch`：写出 `patches/<run_id>.patch`
+- `patch`：写出 `patches/<run_id>.patch`，并把同一份内容存为 run artifact：`runs/<run_id>/changes.patch`
 - `merge`：把 worktree 分支合并回项目仓库，需要 `confirm=true`
 - `discard`：删除 worktree，需要 `confirm=true`
 
@@ -517,6 +517,7 @@ GET /api/runs/{run_id}/artifacts/agent_outputs/final/master.result.json
 
 - 当 run 仍处于 `queued / planning / waiting_approval / running / cancel_requested` 等活跃状态时，`apply` 会返回 `409`
 - 这样可以避免后台任务还在执行时被提前 `merge` 或 `discard`
+- `merge` 会做保守检查：要求项目仓库当前 worktree 干净，并且处于该 run 的 `base_branch`；否则会返回 `409`，建议改用 `patch`
 
 ## 6. 产物目录约定
 
@@ -535,6 +536,7 @@ runs/<run_id>/worker-log.md
 runs/<run_id>/review.md
 runs/<run_id>/summary.md
 runs/<run_id>/diff.patch
+runs/<run_id>/changes.patch
 runs/<run_id>/agent_outputs/*.result.json
 ```
 
