@@ -9,7 +9,18 @@ from .subprocess_runner import SubprocessAgentRunner
 class AiderRunner(SubprocessAgentRunner):
     def run(self, prompt: str, cwd: Path, output_dir: Path) -> RunnerResult:
         raw = self.config.raw.get("aider", {}) or {}
-        command = [str(raw.get("command") or "aider"), "--yes", "--no-auto-commits"]
+        resolved = raw.get("command")
+        if not resolved:
+            # Prefer a repo-local tool install if present (vendor/tools/aider/.venv),
+            # so users don't have to put it on PATH.
+            try:
+                from agents_cluster.core.tools import get_tool_status
+
+                status = get_tool_status("aider")
+                resolved = status.local_command_path or status.command_path
+            except Exception:
+                resolved = None
+        command = [str(resolved or "aider"), "--yes", "--no-auto-commits"]
         if self.config.model:
             command.extend(["--model", str(self.config.model)])
         if raw.get("architect"):
