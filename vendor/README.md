@@ -8,6 +8,7 @@
 - `vendor/logs/`：安装和验证日志，不提交 GitHub。
 - `vendor/repos/`：后续如需克隆 OpenHands、SWE-agent 等源码仓库，可放这里，不提交 GitHub。
 - `vendor/requirements-optional.txt`：可提交的可选依赖清单。
+- `vendor/requirements-workers.txt`：可提交的 worker 依赖清单（较重）。
 
 ## 安装
 
@@ -36,3 +37,10 @@ conda run -n agentsCluster python -m pip install ...
 `aider-chat` 当前先不默认安装，原因是它在本机 Windows/conda 下安装阶段长时间无输出，并且会临时影响 `openai` 版本。后续单独验证后再打开。
 
 OpenHands 和 SWE-agent 依赖较重，先通过 `agentsCluster integrations list` 检测和记录；后续按验证结果决定是加入 conda 环境，还是克隆到 `vendor/repos`。
+
+如果需要安装 worker 相关依赖（OpenHands / SWE-agent / aider），执行：
+
+```powershell
+cd D:\programs\agentsCluster
+.\scripts\install_worker_deps.ps1
+```

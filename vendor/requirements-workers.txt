@@ -1,0 +1,11 @@
+# agentsCluster worker/agent 相关的可选依赖（较重）。
+# 安装位置：独立 conda 环境 agentsCluster。
+# 安装脚本：scripts/install_worker_deps.ps1。
+
+openhands-sdk
+sweagent
+
+# aider-chat 依赖较重（会安装较多依赖，并可能影响 openai 版本），
+# 建议在确认当前环境可接受的前提下再安装。
+aider-chat
+
