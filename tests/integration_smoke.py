@@ -10,7 +10,7 @@ from agents_cluster.runners.openhands import OpenHandsRunner
 def main() -> None:
     statuses = list_integrations()
     names = {status.name for status in statuses}
-    assert {"langgraph", "openai-agents", "openhands-sdk", "aider", "swe-agent"}.issubset(names)
+    assert {"langgraph", "openai-agents", "openhands", "aider", "swe-agent"}.issubset(names)
     status_map = integration_status_map()
     assert status_map["langgraph"].install_hint
 

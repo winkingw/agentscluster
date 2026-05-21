@@ -9,6 +9,7 @@ $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $Log = Join-Path $Logs "install_optional_deps_$Stamp.log"
 
 New-Item -ItemType Directory -Force -Path $Cache, $Logs | Out-Null
+New-Item -ItemType File -Force -Path $Log | Out-Null
 
 Write-Host "agentsCluster optional dependency install"
 Write-Host "Root:      $Root"
@@ -26,7 +27,17 @@ if ($env:CONDA_DEFAULT_ENV -eq "agentsCluster") {
 }
 
 Write-Host "Command: $($Command -join ' ')"
-& $Command[0] $Command[1..($Command.Count - 1)] *>&1 | Tee-Object -FilePath $Log
+$OldPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    & $Command[0] $Command[1..($Command.Count - 1)] 2>&1 | ForEach-Object { $_.ToString() } | Tee-Object -FilePath $Log -Append
+} finally {
+    $ErrorActionPreference = $OldPreference
+}
+
+if ($LASTEXITCODE -ne 0) {
+    throw "Install failed (exit code: $LASTEXITCODE). See log: $Log"
+}
 
 Write-Host ""
 Write-Host "Done. Run:"

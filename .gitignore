@@ -25,6 +25,7 @@ patches/*
 !patches/.gitkeep
 vendor/cache/
 vendor/logs/
+vendor/tools/
 vendor/repos/
 !vendor/.gitkeep
 !vendor/requirements-optional.txt

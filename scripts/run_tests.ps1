@@ -1,8 +1,8 @@
-$ErrorActionPreference = "Stop"
-
 param(
     [string]$EnvName = "agentsCluster"
 )
+
+$ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Push-Location $Root
@@ -24,4 +24,3 @@ try {
 } finally {
     Pop-Location
 }
-

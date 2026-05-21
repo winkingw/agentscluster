@@ -20,6 +20,7 @@ from agents_cluster.core.config import add_project, find_project, get_agent, lis
 from agents_cluster.core.doctor import collect_doctor_checks
 from agents_cluster.core.env import read_dotenv, write_dotenv
 from agents_cluster.core.integrations import list_integrations
+from agents_cluster.core.tools import list_tools
 from agents_cluster.core.paths import ENV_PATH, PATCHES_DIR, RUNS_DIR
 from agents_cluster.core.paths import UI_DIR, UI_DIST_DIR
 from agents_cluster.core.time import now_iso
@@ -113,6 +114,24 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
                             "use_for": status.use_for,
                         }
                         for status in list_integrations()
+                    ]
+                }
+            )
+            return
+        if route == "/api/tools":
+            self._send_json(
+                {
+                    "tools": [
+                        {
+                            "name": status.name,
+                            "installed": status.installed,
+                            "command": status.command,
+                            "command_path": status.command_path,
+                            "local_root": status.local_root,
+                            "local_command_path": status.local_command_path,
+                            "install_hint": status.install_hint,
+                        }
+                        for status in list_tools()
                     ]
                 }
             )

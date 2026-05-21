@@ -2,10 +2,15 @@
 # 安装位置：独立 conda 环境 agentsCluster。
 # 安装脚本：scripts/install_worker_deps.ps1。
 
-openhands-sdk
-sweagent
+# 注意：OpenHands 官方包（openhands / openhands-sdk）目前要求 Python >= 3.12。
+# 如果你希望接入 OpenHands CLI，建议使用 uv 单独安装（不放进 conda env）：
+#   uv tool install openhands --python 3.12
+# 然后在 agents.yaml 里启用 openhands runner（走 CLI subprocess）。
 
-# aider-chat 依赖较重（会安装较多依赖，并可能影响 openai 版本），
-# 建议在确认当前环境可接受的前提下再安装。
-aider-chat
+# 注意：SWE-agent 在 Windows 上更推荐用 Docker 跑（官方也建议 Mac/Linux）。
+# 如果你希望接入 swe-agent CLI，请优先走 Docker/WSL；本 conda env 不默认安装。
 
+# 注意：aider-chat 更建议安装到“独立 venv / 工具环境”里，不要装进主 conda env，
+# 否则可能与 openai-agents 的 openai 版本约束发生冲突。
+# 推荐用 agentsCluster 工具安装器（会装到 vendor/tools/aider/.venv）：
+#   agentsCluster tools install aider

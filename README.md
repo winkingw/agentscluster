@@ -128,6 +128,9 @@ agentsCluster init
 agentsCluster doctor
 agentsCluster config open
 
+agentsCluster tools list
+agentsCluster tools install aider
+
 agentsCluster project add D:\programs\your-project --name your-project
 agentsCluster project list
 agentsCluster project remove your-project

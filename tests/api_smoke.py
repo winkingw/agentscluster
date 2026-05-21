@@ -191,6 +191,12 @@ def main() -> None:
             agents = request_json(f"{base_url}/api/agents")
             assert any(agent["name"] == "master" for agent in agents["agents"])
 
+            tools = request_json(f"{base_url}/api/tools")
+            assert any(tool["name"] == "aider" for tool in tools["tools"])
+
+            integrations = request_json(f"{base_url}/api/integrations")
+            assert any(item["name"] == "langgraph" for item in integrations["integrations"])
+
             master = request_json(f"{base_url}/api/agents/master")
             assert master["agent"]["runner"]
             assert "OPENAI_API_KEY" in master["agent"]["env_keys"]

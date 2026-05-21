@@ -169,6 +169,45 @@ agentsCluster apply <run_id> --mode discard
 }
 ```
 
+### GET /api/integrations
+
+返回可插拔底座集成的探测结果（是否已安装、安装提示、用途说明等）：
+
+```json
+{
+  "integrations": [
+    {
+      "name": "langgraph",
+      "installed": true,
+      "detail": "installed: langgraph",
+      "install_hint": "pip install langgraph",
+      "use_for": "用于可插拔的规划/执行图（graph）编排层。"
+    }
+  ]
+}
+```
+
+### GET /api/tools
+
+返回可选 CLI 工具的探测结果。注意：`agentsCluster` 默认不会把这些工具装进主 conda env，
+而是建议以“独立 venv / 独立工具环境”方式安装（例如 `vendor/tools/aider/.venv`）：
+
+```json
+{
+  "tools": [
+    {
+      "name": "aider",
+      "installed": false,
+      "command": "aider",
+      "command_path": null,
+      "local_root": "D:\\\\programs\\\\agentsCluster\\\\vendor\\\\tools\\\\aider",
+      "local_command_path": null,
+      "install_hint": "agentsCluster tools install aider"
+    }
+  ]
+}
+```
+
 ### GET /api/projects
 
 返回已注册项目：

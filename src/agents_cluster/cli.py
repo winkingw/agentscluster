@@ -21,6 +21,7 @@ from agents_cluster.core.config import (
 from agents_cluster.core.doctor import run_doctor
 from agents_cluster.core.env import load_dotenv
 from agents_cluster.core.integrations import list_integrations, run_spike
+from agents_cluster.core.tools import install_tool, list_tools, uninstall_tool
 from agents_cluster.core.paths import (
     CONFIG_EXAMPLE_PATH,
     CONFIG_PATH,
@@ -67,6 +68,17 @@ def build_parser() -> argparse.ArgumentParser:
     integrations_spike.add_argument("name", choices=["langgraph", "openai-agents", "openhands", "aider", "swe-agent"])
     integrations_spike.add_argument("--goal", default="验证 agentsCluster 可插拔集成")
     integrations_spike.set_defaults(func=cmd_integrations_spike)
+
+    tools_cmd = sub.add_parser("tools", help="Manage optional tool CLIs (installed into vendor/tools).")
+    tools_sub = tools_cmd.add_subparsers(dest="tools_command", required=True)
+    tools_list = tools_sub.add_parser("list", help="List tool CLIs and their status.")
+    tools_list.set_defaults(func=cmd_tools_list)
+    tools_install = tools_sub.add_parser("install", help="Install one tool CLI into vendor/tools/<name>.")
+    tools_install.add_argument("name", choices=["aider"])
+    tools_install.set_defaults(func=cmd_tools_install)
+    tools_uninstall = tools_sub.add_parser("uninstall", help="Uninstall one tool CLI from vendor/tools/<name>.")
+    tools_uninstall.add_argument("name", choices=["aider"])
+    tools_uninstall.set_defaults(func=cmd_tools_uninstall)
 
     serve_cmd = sub.add_parser("serve", help="Start the local JSON API server for frontend use.")
     serve_cmd.add_argument("--host", default="127.0.0.1")
@@ -184,6 +196,31 @@ def cmd_integrations_list(args: argparse.Namespace) -> None:
 
 def cmd_integrations_spike(args: argparse.Namespace) -> None:
     print(run_spike(args.name, args.goal))
+
+
+def cmd_tools_list(args: argparse.Namespace) -> None:
+    print("Tools:")
+    for status in list_tools():
+        marker = "[OK]" if status.installed else "[MISS]"
+        resolved = status.command_path or status.local_command_path or ""
+        local = f" local={status.local_command_path}" if status.local_command_path else ""
+        print(f"  {marker} {status.name}: cmd={status.command} resolved={resolved}{local}")
+        if not status.installed:
+            print(f"       hint: {status.install_hint}")
+
+
+def cmd_tools_install(args: argparse.Namespace) -> None:
+    status = install_tool(args.name)
+    print(f"Installed: {status.name}")
+    if status.local_command_path:
+        print(f"Local command: {status.local_command_path}")
+
+
+def cmd_tools_uninstall(args: argparse.Namespace) -> None:
+    status = uninstall_tool(args.name)
+    print(f"Uninstalled: {status.name}")
+    if status.command_path or status.local_command_path:
+        print(f"Remaining: {status.command_path or status.local_command_path}")
 
 
 def cmd_serve(args: argparse.Namespace) -> None:

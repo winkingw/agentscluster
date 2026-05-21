@@ -9,7 +9,7 @@ from .subprocess_runner import SubprocessAgentRunner
 class AiderRunner(SubprocessAgentRunner):
     def run(self, prompt: str, cwd: Path, output_dir: Path) -> RunnerResult:
         raw = self.config.raw.get("aider", {}) or {}
-        command = ["aider", "--yes", "--no-auto-commits"]
+        command = [str(raw.get("command") or "aider"), "--yes", "--no-auto-commits"]
         if self.config.model:
             command.extend(["--model", str(self.config.model)])
         if raw.get("architect"):

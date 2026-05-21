@@ -105,6 +105,8 @@ agents:
     env:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
     aider:
+      # 如果你使用 `agentsCluster tools install aider` 安装到本仓库，可直接指定绝对路径：
+      # command: D:\programs\agentsCluster\vendor\tools\aider\.venv\Scripts\aider.exe
       extra_args: []
 
   openhands_coder:

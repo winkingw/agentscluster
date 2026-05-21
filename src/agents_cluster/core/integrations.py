@@ -29,28 +29,23 @@ OPTIONAL_INTEGRATIONS: Dict[str, Dict[str, str]] = {
         "install": "pip install openai-agents",
         "use_for": "用于 handoff、MCP、tracing、guardrails 和轻量 agent 协作层。",
     },
-    "openhands-sdk": {
-        "module": "openhands.sdk",
-        "install": "pip install openhands-sdk",
-        "use_for": "用于把成熟的软件工程 agent 作为 worker 接入，后续可扩展到 agent-server 或 REST。",
-    },
-    "openhands-agent-server": {
-        "module": "openhands.agent_server",
-        "install": "pip install openhands-sdk",
-        "use_for": "用于本地或远程 agent server，方便前端或远程 worker 复用。",
-    },
 }
 
 OPTIONAL_CLIS: Dict[str, Dict[str, str]] = {
+    "openhands": {
+        "command": "openhands",
+        "install": "uv tool install openhands --python 3.12",
+        "use_for": "用于把 OpenHands 作为 worker runner 接入（建议通过 CLI subprocess 方式集成）。",
+    },
     "aider": {
         "command": "aider",
-        "install": "pip install aider-chat",
+        "install": "agentsCluster tools install aider",
         "use_for": "用于单仓库代码修改型 worker，可作为 coder runner。",
     },
     "swe-agent": {
         "command": "sweagent",
         "alt_command": "swe-agent",
-        "install": "pip install sweagent",
+        "install": "Use Docker/WSL on Windows; or: pip install sweagent",
         "use_for": "用于 GitHub issue 或 bugfix 类型的专用 worker。",
     },
 }
@@ -177,18 +172,7 @@ def _run_openai_agents_spike(goal: str) -> str:
 
 
 def _run_openhands_spike(goal: str) -> str:
-    if not _module_exists("openhands.sdk"):
-        raise RuntimeError("OpenHands SDK is not installed. Run: pip install openhands-sdk")
-
-    import openhands.sdk as sdk
-
-    version = getattr(sdk, "__version__", "unknown")
-    return (
-        "OpenHands SDK spike ok.\n"
-        f"openhands.sdk version: {version}\n"
-        f"goal: {goal}\n"
-        "next: 新增 openhands runner，在 agentsCluster worktree 内启动 SDK 或 agent-server worker。"
-    )
+    return _run_cli_spike("openhands", goal, "uv tool install openhands --python 3.12")
 
 
 def _run_cli_spike(command_name: str, goal: str, hint: str) -> str:
@@ -216,7 +200,7 @@ def _run_cli_spike(command_name: str, goal: str, hint: str) -> str:
 
 
 def _run_aider_spike(goal: str) -> str:
-    return _run_cli_spike("aider", goal, "pip install aider-chat")
+    return _run_cli_spike("aider", goal, "agentsCluster tools install aider")
 
 
 def _run_swe_agent_spike(goal: str) -> str:

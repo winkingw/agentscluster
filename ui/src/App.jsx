@@ -193,6 +193,7 @@ function App() {
   const [agents, setAgents] = useState([]);
   const [doctor, setDoctor] = useState({ checks: [], summary: { total: 0, passed: 0, failed: 0 } });
   const [integrations, setIntegrations] = useState([]);
+  const [tools, setTools] = useState([]);
   const [selectedRunId, setSelectedRunId] = useState("");
   const [runDetail, setRunDetail] = useState(null);
   const [selectedArtifact, setSelectedArtifact] = useState(null);
@@ -214,13 +215,14 @@ function App() {
   }, []);
 
   const refreshCore = useCallback(async () => {
-    const [configRes, envRes, projectsRes, agentsRes, doctorRes, integrationsRes, healthRes] = await Promise.all([
+    const [configRes, envRes, projectsRes, agentsRes, doctorRes, integrationsRes, toolsRes, healthRes] = await Promise.all([
       requestJson("/api/config"),
       requestJson("/api/env"),
       requestJson("/api/projects"),
       requestJson("/api/agents"),
       requestJson("/api/doctor"),
       requestJson("/api/integrations"),
+      requestJson("/api/tools"),
       requestJson("/health"),
     ]);
 
@@ -243,6 +245,7 @@ function App() {
     setAgents(agentsRes.agents || []);
     setDoctor(doctorRes || { checks: [], summary: { total: 0, passed: 0, failed: 0 } });
     setIntegrations(integrationsRes.integrations || []);
+    setTools(toolsRes.tools || []);
     setHealth(healthRes.ok ? "ok" : "bad");
 
     const nextProjectValues = nextProjects.map((project) => project.name || project.path);
@@ -1274,6 +1277,36 @@ function App() {
                     ))
                   ) : (
                     <div className="muted">暂无集成信息</div>
+                  )}
+                </div>
+              </section>
+
+              <section className="panel">
+                <div className="panel-header">
+                  <h2>Tools</h2>
+                  <span className="panel-hint">可选 CLI 工具（建议独立安装，不污染主环境）</span>
+                </div>
+                <div className="item-list">
+                  {tools.length ? (
+                    tools.map((tool) => (
+                      <div className="item" key={tool.name}>
+                        <div className="item-title">
+                          {tool.name} {tool.installed ? "(installed)" : "(missing)"}
+                        </div>
+                        <div className="item-sub">
+                          cmd: {tool.command}
+                          {tool.command_path ? ` | path: ${tool.command_path}` : ""}
+                          {!tool.command_path && tool.local_command_path ? ` | local: ${tool.local_command_path}` : ""}
+                        </div>
+                        {!tool.installed ? (
+                          <div className="panel-hint" style={{ marginTop: 6 }}>
+                            {tool.install_hint}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="muted">暂无工具信息</div>
                   )}
                 </div>
               </section>
