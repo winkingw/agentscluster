@@ -74,4 +74,8 @@ def _resolve_command(command: List[str]) -> List[str]:
     executable = shutil.which(command[0])
     if not executable:
         return command
+    if os.name == "nt" and executable.lower().endswith((".cmd", ".bat")):
+        # Some environments (notably npm-installed CLIs) place .cmd wrappers on PATH.
+        # Running them directly can fail with WinError 2; use cmd.exe explicitly.
+        return ["cmd.exe", "/c", executable, *command[1:]]
     return [executable, *command[1:]]
