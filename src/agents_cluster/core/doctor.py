@@ -27,6 +27,7 @@ def collect_doctor_checks() -> List[Check]:
     checks: List[Check] = []
     checks.extend(_path_checks())
     checks.extend(_tool_checks())
+    checks.extend(_github_checks())
     checks.extend(_config_checks())
     checks.extend(_integration_checks())
     checks.extend(_mcp_checks())
@@ -72,6 +73,77 @@ def _tool_checks() -> List[Check]:
     for tool in ("git", "codex", "claude"):
         found = shutil.which(tool)
         checks.append(Check(tool, bool(found), found or "not found in PATH"))
+    return checks
+
+
+def _github_checks() -> List[Check]:
+    """
+    Best-effort diagnostics for common GitHub push failures on Windows.
+
+    This is intentionally heuristic and only flags *likely* misconfigurations,
+    for example github.com being redirected to 127.0.0.1 via hosts.
+    """
+
+    checks: List[Check] = []
+    if os.name != "nt":
+        return checks
+
+    # 1) hosts file overrides
+    hosts_path = Path(r"C:\Windows\System32\drivers\etc\hosts")
+    if hosts_path.exists():
+        try:
+            text = hosts_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            text = ""
+        bad_lines = []
+        for line in text.splitlines():
+            raw = line.strip()
+            if not raw or raw.startswith("#"):
+                continue
+            # strip inline comment
+            raw = raw.split("#", 1)[0].strip()
+            parts = raw.split()
+            if len(parts) < 2:
+                continue
+            ip = parts[0]
+            hosts = parts[1:]
+            if ip in ("127.0.0.1", "::1") and any(h.lower() in ("github.com", "api.github.com") for h in hosts):
+                bad_lines.append(line.strip())
+        checks.append(
+            Check(
+                "github hosts override",
+                not bad_lines,
+                "ok" if not bad_lines else ("; ".join(bad_lines)[:160] + ("..." if len("; ".join(bad_lines)) > 160 else "")),
+                "Remove github.com/api.github.com overrides from hosts (requires admin), or disable the local proxy tool.",
+            )
+        )
+
+    # 2) git proxy config that forces GitHub traffic to localhost
+    try:
+        proc = subprocess.run(
+            ["git", "config", "--global", "--get", "http.https://github.com.proxy"],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+        )
+        value = (proc.stdout or "").strip()
+    except Exception:
+        value = ""
+    if value:
+        checks.append(
+            Check(
+                "git github proxy",
+                False,
+                value,
+                "Run: git config --global --unset http.https://github.com.proxy (or set it to your real proxy).",
+            )
+        )
+    else:
+        checks.append(Check("git github proxy", True, "not set"))
+
     return checks
 
 
