@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
+import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List
 
 
@@ -103,6 +106,10 @@ def run_spike(name: str, goal: str) -> str:
         return _run_openai_agents_spike(goal)
     if normalized in ("openhands", "openhands-sdk"):
         return _run_openhands_spike(goal)
+    if normalized in ("aider", "aider-chat"):
+        return _run_aider_spike(goal)
+    if normalized in ("swe-agent", "sweagent", "swe"):
+        return _run_swe_agent_spike(goal)
     raise ValueError(f"Unknown integration spike: {name}")
 
 
@@ -182,3 +189,55 @@ def _run_openhands_spike(goal: str) -> str:
         f"goal: {goal}\n"
         "next: 新增 openhands runner，在 agentsCluster worktree 内启动 SDK 或 agent-server worker。"
     )
+
+
+def _run_cli_spike(command_name: str, goal: str, hint: str) -> str:
+    command = shutil.which(command_name)
+    if not command:
+        raise RuntimeError(f"{command_name} is not installed. Run: {hint}")
+    args = ["--version"]
+    if os.name == "nt" and command.lower().endswith((".cmd", ".bat")):
+        full = ["cmd.exe", "/c", command, *args]
+    else:
+        full = [command, *args]
+    proc = subprocess.run(
+        full,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+    )
+    output = (proc.stdout.strip() or proc.stderr.strip() or "").splitlines()
+    head = "\n".join(output[:6]) if output else "(no output)"
+    status = "ok" if proc.returncode == 0 else f"nonzero rc={proc.returncode}"
+    return f"{command_name} spike {status}.\ngoal: {goal}\noutput:\n{head}"
+
+
+def _run_aider_spike(goal: str) -> str:
+    return _run_cli_spike("aider", goal, "pip install aider-chat")
+
+
+def _run_swe_agent_spike(goal: str) -> str:
+    command = shutil.which("sweagent") or shutil.which("swe-agent")
+    if not command:
+        raise RuntimeError("swe-agent is not installed. Run: pip install sweagent")
+    name = Path(command).name
+    if os.name == "nt" and command.lower().endswith((".cmd", ".bat")):
+        full = ["cmd.exe", "/c", command, "--version"]
+    else:
+        full = [command, "--version"]
+    proc = subprocess.run(
+        full,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+    )
+    output = (proc.stdout.strip() or proc.stderr.strip() or "").splitlines()
+    head = "\n".join(output[:6]) if output else "(no output)"
+    status = "ok" if proc.returncode == 0 else f"nonzero rc={proc.returncode}"
+    return f"{name} spike {status}.\ngoal: {goal}\noutput:\n{head}"

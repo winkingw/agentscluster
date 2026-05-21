@@ -64,7 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     integrations_list = integrations_sub.add_parser("list", help="List optional integrations.")
     integrations_list.set_defaults(func=cmd_integrations_list)
     integrations_spike = integrations_sub.add_parser("spike", help="Run a local no-model spike for one integration.")
-    integrations_spike.add_argument("name", choices=["langgraph", "openai-agents", "openhands"])
+    integrations_spike.add_argument("name", choices=["langgraph", "openai-agents", "openhands", "aider", "swe-agent"])
     integrations_spike.add_argument("--goal", default="验证 agentsCluster 可插拔集成")
     integrations_spike.set_defaults(func=cmd_integrations_spike)
 
