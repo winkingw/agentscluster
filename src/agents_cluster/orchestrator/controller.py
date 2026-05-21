@@ -668,6 +668,8 @@ def apply_run(run_id: str, mode: Optional[str] = None) -> None:
     project_path = Path(run["project_path"])
     worktree_path = Path(run["worktree_path"])
     branch_name = run["branch_name"]
+    metadata = run.get("metadata", {}) or {}
+    base_branch = str(metadata.get("base_branch") or "")
 
     if not mode:
         print("Choose how to handle this run:")
@@ -689,8 +691,31 @@ def apply_run(run_id: str, mode: Optional[str] = None) -> None:
         return
 
     if mode == "merge":
+        # Merge is intentionally conservative: we only merge into the original
+        # repo worktree when it is clean and on the expected base branch.
+        if base_branch:
+            current = git_ops.current_branch(project_path)
+            if current != base_branch:
+                raise ValueError(
+                    f"Refusing to merge: project is on branch '{current}', expected '{base_branch}'. "
+                    "Checkout the expected base branch and ensure the repo is clean, or use --mode patch."
+                )
+        if git_ops.is_dirty(project_path):
+            raise ValueError(
+                "Refusing to merge: original project worktree has uncommitted changes. "
+                "Commit/stash them first, or use --mode patch."
+            )
         output = git_ops.merge_branch(project_path, branch_name)
         db.update_run(run_id, status="merged")
+        # Best-effort cleanup after a successful merge.
+        try:
+            git_ops.remove_worktree(project_path, worktree_path, force=True)
+        except Exception:
+            pass
+        try:
+            git_ops.delete_branch(project_path, branch_name, force=False)
+        except Exception:
+            pass
         print(output)
         print("Merged into original project.")
         return
@@ -698,6 +723,11 @@ def apply_run(run_id: str, mode: Optional[str] = None) -> None:
     if mode == "discard":
         git_ops.remove_worktree(project_path, worktree_path, force=True)
         db.update_run(run_id, status="discarded")
+        # Best-effort delete the branch after discarding the worktree.
+        try:
+            git_ops.delete_branch(project_path, branch_name, force=True)
+        except Exception:
+            pass
         print("Worktree removed.")
         return
 

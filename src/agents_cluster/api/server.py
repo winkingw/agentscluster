@@ -723,14 +723,54 @@ class AgentsClusterHandler(BaseHTTPRequestHandler):
                 self._send_json({"run_id": run_id, "mode": mode, "patch_path": str(patch_path)})
                 return
             if mode == "merge":
+                metadata = run.get("metadata", {}) or {}
+                base_branch = str(metadata.get("base_branch") or "")
+                if base_branch:
+                    current = git_ops.current_branch(project_path)
+                    if current != base_branch:
+                        self._send_error(
+                            HTTPStatus.CONFLICT,
+                            (
+                                f"Refusing to merge: project is on branch '{current}', expected '{base_branch}'. "
+                                "Checkout the expected base branch and ensure the repo is clean, or use patch mode."
+                            ),
+                        )
+                        return
+                if git_ops.is_dirty(project_path):
+                    self._send_error(
+                        HTTPStatus.CONFLICT,
+                        (
+                            "Refusing to merge: original project worktree has uncommitted changes. "
+                            "Commit/stash them first, or use patch mode."
+                        ),
+                    )
+                    return
                 output = git_ops.merge_branch(project_path, branch_name)
                 db.update_run(run_id, status="merged")
-                self._send_json({"run_id": run_id, "mode": mode, "output": output})
+                # Best-effort cleanup after successful merge.
+                cleanup = {"worktree_removed": False, "branch_deleted": False}
+                try:
+                    git_ops.remove_worktree(project_path, worktree_path, force=True)
+                    cleanup["worktree_removed"] = True
+                except Exception:
+                    cleanup["worktree_removed"] = False
+                try:
+                    git_ops.delete_branch(project_path, branch_name, force=False)
+                    cleanup["branch_deleted"] = True
+                except Exception:
+                    cleanup["branch_deleted"] = False
+                self._send_json({"run_id": run_id, "mode": mode, "output": output, "cleanup": cleanup})
                 return
             if mode == "discard":
                 git_ops.remove_worktree(project_path, worktree_path, force=True)
                 db.update_run(run_id, status="discarded")
-                self._send_json({"run_id": run_id, "mode": mode, "discarded": True})
+                cleanup = {"branch_deleted": False}
+                try:
+                    git_ops.delete_branch(project_path, branch_name, force=True)
+                    cleanup["branch_deleted"] = True
+                except Exception:
+                    cleanup["branch_deleted"] = False
+                self._send_json({"run_id": run_id, "mode": mode, "discarded": True, "cleanup": cleanup})
                 return
         except Exception as exc:
             self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))

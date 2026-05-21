@@ -82,6 +82,16 @@ def merge_branch(project_path: Path, branch_name: str, no_ff: bool = True) -> st
     return proc.stdout + proc.stderr
 
 
+def delete_branch(project_path: Path, branch_name: str, force: bool = False) -> str:
+    args = ["branch"]
+    args.append("-D" if force else "-d")
+    args.append(branch_name)
+    proc = run_git(project_path, args, check=False)
+    if proc.returncode != 0:
+        raise GitError(proc.stderr.strip() or proc.stdout.strip())
+    return proc.stdout + proc.stderr
+
+
 def checkout_branch(project_path: Path, branch: Optional[str]) -> None:
     if branch and branch != "HEAD":
         run_git(project_path, ["checkout", branch])
