@@ -194,8 +194,8 @@ def cmd_doctor(args: argparse.Namespace) -> None:
 
 def cmd_integrations_list(args: argparse.Namespace) -> None:
     print("Optional integrations:")
-    print("说明：OpenHands 仅用于对比和扩展，不是运行 agentsCluster 的必要条件。")
-    print("主流程依赖：Codex / Claude / DeepSeek / LangGraph / OpenAI Agents SDK。")
+    print("Note: OpenHands is optional (non-core) and is NOT required to run agentsCluster.")
+    print("Core flow depends on: Codex / Claude / DeepSeek / LangGraph / OpenAI Agents SDK.")
     for status in list_integrations():
         marker = "installed" if status.installed else "missing"
         print(f"- {status.name}: {marker}")
