@@ -18,6 +18,7 @@ try {
     & conda run -n $EnvName python tests\\langgraph_smoke.py
     & conda run -n $EnvName python tests\\integration_smoke.py
     & conda run -n $EnvName python tests\\doctor_optional_openhands.py
+    & conda run -n $EnvName python tests\\planning_tolerance.py
     & conda run -n $EnvName python tests\\e2e_dry.py
     & conda run -n $EnvName python tests\\api_smoke.py
 

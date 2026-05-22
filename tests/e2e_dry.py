@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from agents_cluster.core.paths import PATCHES_DIR, RUNS_DIR
@@ -21,6 +22,18 @@ def main() -> None:
     assert (run_dir / "diff.patch").exists()
     assert (run_dir / "summary.md").exists()
     assert (run_dir / "changes.patch").exists()
+
+    # Ensure planning is multi-agent (not master-only).
+    task_plan = json.loads((run_dir / "task-plan.json").read_text(encoding="utf-8"))
+    assert task_plan.get("planning_mode") == "multi-agent"
+    planners = task_plan.get("planning_agents") or []
+    assert isinstance(planners, list) and len(planners) >= 2
+    planner_outputs = task_plan.get("planner_outputs") or []
+    assert isinstance(planner_outputs, list) and len(planner_outputs) >= 2
+    for item in planner_outputs:
+        artifact = str(item.get("artifact") or "")
+        if artifact:
+            assert (run_dir / artifact).exists(), f"planner artifact missing: {artifact}"
 
     # Cleanup artifacts to avoid local growth on repeated runs.
     try:
@@ -47,4 +60,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

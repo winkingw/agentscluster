@@ -10,6 +10,8 @@ settings:
   max_rework_rounds: 1
   orchestrator: langgraph
   integration_strategy: adapter
+  # planning 阶段参与的 planner agents（可选；默认使用 architect/coder/tester）。
+  planning_agents: [architect, coder, tester]
 
 agents:
   master:

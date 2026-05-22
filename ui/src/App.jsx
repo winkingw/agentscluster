@@ -989,6 +989,9 @@ function App() {
 
                       <div>
                         <h3 className="subhead">产物</h3>
+                        <div className="panel-hint" style={{ marginTop: 6 }}>
+                          planning 阶段也是 multi-agent：各 planner 的独立输出会落盘到 runs/&lt;run_id&gt;/planning/*.md。
+                        </div>
                         <div className="artifact-list">
                           {selectedRunArtifacts.length ? (
                             selectedRunArtifacts.map((artifact) => (
@@ -1077,6 +1080,21 @@ function App() {
                       step="1"
                       value={configDraft.settings?.max_rework_rounds ?? 1}
                       onChange={(event) => updateSetting("max_rework_rounds", Number.parseInt(event.target.value, 10) || 0)}
+                    />
+                  </Field>
+                  <Field
+                    label="planning_agents"
+                    hint="planning 阶段参与的 planner agents（逗号分隔；默认 architect,coder,tester）。"
+                  >
+                    <input
+                      type="text"
+                      value={
+                        Array.isArray(configDraft.settings?.planning_agents)
+                          ? formatCsv(configDraft.settings?.planning_agents)
+                          : String(configDraft.settings?.planning_agents || "")
+                      }
+                      placeholder="architect,coder,tester"
+                      onChange={(event) => updateSetting("planning_agents", event.target.value)}
                     />
                   </Field>
                 </div>

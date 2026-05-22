@@ -10,8 +10,16 @@ from .paths import DB_PATH
 
 def connect(path: Path = DB_PATH) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    # NOTE: agentsCluster may write events from multiple concurrent agents (threads/processes).
+    # Increase the lock wait to reduce spurious "database is locked" failures under light parallelism.
+    conn = sqlite3.connect(str(path), timeout=30.0)
     conn.row_factory = sqlite3.Row
+    try:
+        # Best-effort: WAL improves concurrency for many-readers/one-writer patterns.
+        conn.execute("pragma journal_mode=WAL;")
+        conn.execute("pragma synchronous=NORMAL;")
+    except Exception:
+        pass
     return conn
 
 

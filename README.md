@@ -16,7 +16,8 @@
 - 项目注册、列出、删除注册
 - `doctor` 环境检查
 - `test-agent <name>` 单独测试某个 agent
-- 主控规划 -> worker 执行 -> reviewer 审核 -> master 总结
+- 多 planner 并行规划 -> master 汇总裁决 -> worker 执行 -> reviewer 审核 -> master 总结
+- planning 阶段每个 planner 的独立输出会落盘到 `runs/<run_id>/planning/*.md`
 - reviewer 不通过时自动回派 `coder` 返工，并可追加 `tester`
 - `runs resume / retry-plan / retry-execute`
 - `runs artifacts`、HTTP artifacts 查询
@@ -64,6 +65,10 @@ D:\programs\agentsCluster\config\agents.yaml
 ```text
 D:\programs\agentsCluster\config\agents.example.yaml
 ```
+
+规划阶段（multi-agent）配置（可选）：
+
+- `settings.planning_agents`: 指定参与 planning 的 planner agents；不配置时默认 `architect,coder,tester`
 
 密钥文件：
 

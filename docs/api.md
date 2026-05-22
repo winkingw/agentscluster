@@ -33,7 +33,7 @@ agentsCluster serve --host 127.0.0.1 --port 8765
 常见状态：
 
 - `queued`：已进入后台队列，等待开始 `planning` 或 `execute`
-- `planning`：主控正在生成计划
+- `planning`：多 planner 并行生成方案，master 汇总裁决生成最终计划
 - `waiting_approval`：计划已生成，等待用户确认是否执行
 - `running`：worker / reviewer / master summary 正在执行
 - `reviewed`：运行完成，已有总结
@@ -135,7 +135,8 @@ agentsCluster apply <run_id> --mode discard
 {
   "config": {
     "settings": {
-      "orchestrator": "builtin"
+      "orchestrator": "builtin",
+      "planning_agents": ["architect", "coder", "tester"]
     },
     "agents": {},
     "projects": []
@@ -363,6 +364,13 @@ GET /api/runs/{run_id}/events?after_id=120&limit=200
 - `message`
 - `metadata`
 
+planning 阶段相关的常见 `kind`（用于前端时间线展示）：
+
+- `planning_started`
+- `planner_started` / `planner_completed` / `planner_failed`（每个 planner agent 一条）
+- `master_synthesis_completed`（master 汇总裁决完成）
+- `planning_completed`（plan.md + task-plan.json 已就绪）
+
 ### GET /api/runs/{run_id}/events/stream
 
 SSE 事件流接口，适合前端实时订阅。
@@ -386,6 +394,7 @@ SSE 事件类型：
 
 - `plan.md`
 - `task-plan.json`
+- `planning/*.md`（各 planner 的独立规划输出，便于 UI 展示与追溯）
 - `worker-log.md`
 - `review.md`
 - `summary.md`
@@ -571,6 +580,7 @@ runs/<run_id>/
 ```text
 runs/<run_id>/plan.md
 runs/<run_id>/task-plan.json
+runs/<run_id>/planning/*.md
 runs/<run_id>/worker-log.md
 runs/<run_id>/review.md
 runs/<run_id>/summary.md
@@ -581,7 +591,7 @@ runs/<run_id>/agent_outputs/*.result.json
 
 其中：
 
-- `task-plan.json` 适合作为前端结构化展示的数据源
+- `task-plan.json` 适合作为前端结构化展示的数据源（包含 `planning_mode/planning_agents/planner_outputs` 等 planning 元数据）
 - `agent_outputs/*.result.json` 适合作为 agent 结果明细
 - `events` 适合作为时间线
 

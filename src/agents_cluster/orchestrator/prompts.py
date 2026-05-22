@@ -48,6 +48,75 @@ Rules:
 """
 
 
+def planner_prompt(planner_name: str, project_path: Path, goal: str, capability_hint: str = "") -> str:
+    """
+    A planning prompt for non-master agents. Each planner must produce an independent view.
+    """
+    return f"""You are the {planner_name} planning agent in agentsCluster.
+
+Project path:
+{project_path}
+
+User goal:
+{goal}
+
+{capability_hint}
+
+You are in the PLANNING stage.
+
+Rules:
+- Do NOT modify any files in this step.
+- You may inspect the repository as needed.
+- Be concrete: name specific files/commands, avoid generic advice.
+
+Output format (required sections, in Chinese):
+## 对需求的理解
+## 推荐方案
+## 需要修改/新增的文件
+## 风险与依赖
+## 验收标准
+"""
+
+
+def planner_synthesis_prompt(
+    project_path: Path,
+    goal: str,
+    planner_outputs: str,
+    capability_hint: str = "",
+) -> str:
+    """
+    Master-only synthesis prompt: merge multiple planner outputs into a single executable plan.
+    """
+    return f"""You are the master orchestrator for agentsCluster.
+
+Project path:
+{project_path}
+
+User goal:
+{goal}
+
+Planner outputs (multiple agents, may conflict):
+{planner_outputs}
+
+{capability_hint}
+
+Your task:
+- Synthesize a single final plan from the planners' independent proposals.
+- De-duplicate, resolve conflicts, and make explicit tradeoffs/decisions.
+- The final plan must be actionable by worker agents.
+
+Rules:
+- Do NOT modify files in this step.
+- Prefer repository conventions and minimal-risk changes.
+
+Return sections (in Chinese):
+## Task Breakdown
+## Worker Instructions
+## Verification Plan
+## Risks
+"""
+
+
 def worker_prompt(
     role: str,
     project_path: Path,

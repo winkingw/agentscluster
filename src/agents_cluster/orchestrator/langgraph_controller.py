@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import operator
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, TypedDict
+from typing import Any, Annotated, Callable, Dict, List, Optional, Tuple, TypedDict
 
 from .task_protocol import build_task_plan
 
 
-PlanAgent = Callable[[str, Path], str]
+PlannerRunner = Callable[[str], Dict[str, Any]]
+SynthesisRunner = Callable[[List[Dict[str, Any]]], str]
 WorkerAgent = Callable[[str, str, str], str]
 ReviewerAgent = Callable[[int, str, str], str]
 ReworkAgent = Callable[[int, str], str]
@@ -20,6 +22,8 @@ class PlanningState(TypedDict):
     goal: str
     worktree_path: str
     workers: List[str]
+    planning_agents: List[str]
+    planner_outputs: Annotated[List[Dict[str, Any]], operator.add]
     plan: str
     task_plan: Dict
 
@@ -46,15 +50,32 @@ def plan_with_langgraph(
     goal: str,
     worktree_path: Path,
     workers: List[str],
-    plan_agent: PlanAgent,
+    planning_agents: List[str],
+    run_planner: PlannerRunner,
+    run_synthesis: SynthesisRunner,
 ) -> Dict:
     try:
         from langgraph.graph import END, START, StateGraph
     except ImportError as exc:
         raise RuntimeError("LangGraph is not installed. Run: .\\scripts\\install_optional_deps.ps1") from exc
 
-    def master_plan_node(state: PlanningState) -> Dict:
-        plan = plan_agent(state["goal"], Path(state["worktree_path"]))
+    def make_planner_node(agent_name: str):
+        def planner_node(_state: PlanningState) -> Dict:
+            # Never raise here: a single planner failure must not kill the whole plan graph.
+            try:
+                record = run_planner(agent_name)
+            except Exception as exc:
+                record = {
+                    "agent": agent_name,
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            return {"planner_outputs": [record]}
+
+        return planner_node
+
+    def master_synthesis_node(state: PlanningState) -> Dict:
+        plan = run_synthesis(list(state.get("planner_outputs") or []))
         return {"plan": plan}
 
     def task_graph_node(state: PlanningState) -> Dict:
@@ -63,22 +84,42 @@ def plan_with_langgraph(
         return {"task_plan": task_plan}
 
     graph = StateGraph(PlanningState)
-    graph.add_node("master_plan", master_plan_node)
+    planner_node_names: List[str] = []
+    for planner in planning_agents:
+        node_name = f"planner_{planner}"
+        planner_node_names.append(node_name)
+        graph.add_node(node_name, make_planner_node(planner))
+        graph.add_edge(START, node_name)
+
+    graph.add_node("master_synthesis", master_synthesis_node)
     graph.add_node("task_graph", task_graph_node)
-    graph.add_edge(START, "master_plan")
-    graph.add_edge("master_plan", "task_graph")
+
+    if planner_node_names:
+        # Fan-in: wait for all planners to complete before synthesis.
+        graph.add_edge(planner_node_names, "master_synthesis")
+    else:
+        # Defensive: if no planners were configured, still run synthesis (it should error clearly).
+        graph.add_edge(START, "master_synthesis")
+
+    graph.add_edge("master_synthesis", "task_graph")
     graph.add_edge("task_graph", END)
 
     compiled = graph.compile()
-    return compiled.invoke(
-        {
-            "goal": goal,
-            "worktree_path": str(worktree_path),
-            "workers": workers,
-            "plan": "",
-            "task_plan": {},
-        }
-    )
+    initial = {
+        "goal": goal,
+        "worktree_path": str(worktree_path),
+        "workers": workers,
+        "planning_agents": planning_agents,
+        "planner_outputs": [],
+        "plan": "",
+        "task_plan": {},
+    }
+
+    # Prefer best-effort parallelism; fall back if this LangGraph version doesn't accept the config.
+    try:
+        return compiled.invoke(initial, {"max_concurrency": max(1, len(planning_agents))})
+    except TypeError:
+        return compiled.invoke(initial)
 
 
 def execute_with_langgraph(

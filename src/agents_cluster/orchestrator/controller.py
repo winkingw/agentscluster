@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 from agents_cluster.core import db
@@ -13,12 +14,21 @@ from agents_cluster.runners.factory import create_runner
 from agents_cluster.workspace import git_ops
 from agents_cluster.workspace.manager import prepare_worktree
 
-from .prompts import agent_capability_hint, master_plan_prompt, master_summary_prompt, review_prompt, worker_prompt
+from .prompts import (
+    agent_capability_hint,
+    master_plan_prompt,
+    master_summary_prompt,
+    planner_prompt,
+    planner_synthesis_prompt,
+    review_prompt,
+    worker_prompt,
+)
 from .task_protocol import build_task_plan, write_agent_result, write_task_plan
 from .langgraph_controller import execute_with_langgraph, plan_with_langgraph
 
 
 DEFAULT_WORKERS = ["architect", "coder", "tester"]
+DEFAULT_PLANNERS = ["architect", "coder", "tester"]
 
 
 class RunCancelled(RuntimeError):
@@ -51,6 +61,7 @@ def create_run(
         "metadata": {
             "base_branch": worktree_info["base_branch"],
             "workers": workers or DEFAULT_WORKERS,
+            "planning_agents": _planning_agents(config, {}),
             "max_rework_rounds": _max_rework_rounds(config, max_rework_rounds),
             "orchestrator": _orchestrator_name(config),
         },
@@ -118,37 +129,157 @@ def plan_run(
     goal = str(run["goal"])
     metadata = run.get("metadata", {}) or {}
     worker_names = _worker_names(metadata)
+    planning_agents = _planning_agents(config, metadata)
     orchestrator = str(metadata.get("orchestrator") or _orchestrator_name(config))
 
     try:
         _ensure_not_cancelled(run_id, cancel_check)
         db.update_run(run_id, status="planning")
-        db.add_event(run_id, now_iso(), "system", "planning_started", "planning started")
-        if orchestrator == "langgraph":
-            def plan_agent(plan_goal: str, plan_worktree: Path) -> str:
-                _ensure_not_cancelled(run_id, cancel_check)
-                return _run_agent(
-                    config,
-                    "master",
-                    master_plan_prompt(plan_worktree, plan_goal, _capability_hint(config, "master")),
-                    plan_worktree,
-                    outputs_dir,
-                )
+        # Persist planning_agents into run metadata for older runs created before this field existed.
+        if metadata.get("planning_agents") != planning_agents:
+            metadata["planning_agents"] = planning_agents
+            try:
+                db.update_run(run_id, metadata=metadata)
+            except Exception:
+                pass
 
-            planning_state = plan_with_langgraph(goal, worktree_path, worker_names, plan_agent)
+        db.add_event(
+            run_id,
+            now_iso(),
+            "system",
+            "planning_started",
+            "planning started",
+            {"planning_mode": "multi-agent", "planning_agents": planning_agents},
+        )
+
+        planner_artifacts_dir = run_dir / "planning"
+        planner_artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        def run_planner_record(agent_name: str) -> Dict[str, Any]:
+            started_at = now_iso()
+            db.add_event(
+                run_id,
+                started_at,
+                agent_name,
+                "planner_started",
+                "planner started",
+                {"planner": agent_name},
+            )
+            try:
+                _ensure_not_cancelled(run_id, cancel_check)
+                output = _run_agent(
+                    config,
+                    agent_name,
+                    planner_prompt(agent_name, worktree_path, goal, _capability_hint(config, agent_name)),
+                    worktree_path,
+                    outputs_dir / "planning" / agent_name,
+                )
+                artifact_rel = f"planning/{agent_name}.md"
+                (planner_artifacts_dir / f"{agent_name}.md").write_text(output, encoding="utf-8")
+                completed_at = now_iso()
+                db.add_event(
+                    run_id,
+                    completed_at,
+                    agent_name,
+                    "planner_completed",
+                    "planner completed",
+                    {"planner": agent_name, "artifact": artifact_rel},
+                )
+                return {
+                    "agent": agent_name,
+                    "status": "completed",
+                    "artifact": artifact_rel,
+                    "started_at": started_at,
+                    "completed_at": completed_at,
+                    "output": output,
+                }
+            except Exception as exc:
+                failed_at = now_iso()
+                artifact_rel = f"planning/{agent_name}.error.txt"
+                (planner_artifacts_dir / f"{agent_name}.error.txt").write_text(str(exc), encoding="utf-8")
+                db.add_event(
+                    run_id,
+                    failed_at,
+                    agent_name,
+                    "planner_failed",
+                    "planner failed",
+                    {"planner": agent_name, "artifact": artifact_rel, "error": str(exc)[:2000]},
+                )
+                return {
+                    "agent": agent_name,
+                    "status": "failed",
+                    "artifact": artifact_rel,
+                    "started_at": started_at,
+                    "failed_at": failed_at,
+                    "error": str(exc),
+                }
+
+        def run_master_synthesis(planner_records: List[Dict[str, Any]]) -> str:
+            successful = [r for r in planner_records if r.get("status") == "completed" and r.get("output")]
+            if not successful:
+                raise RuntimeError("All planning agents failed; cannot synthesize a plan.")
+
+            joined = "\n\n".join(
+                f"### {r.get('agent')}\n\n{r.get('output')}\n" for r in successful
+            )
+            plan_text = _run_agent(
+                config,
+                "master",
+                planner_synthesis_prompt(worktree_path, goal, joined, _capability_hint(config, "master")),
+                worktree_path,
+                outputs_dir / "planning" / "master_synthesis",
+            )
+            db.add_event(
+                run_id,
+                now_iso(),
+                "master",
+                "master_synthesis_completed",
+                "master synthesis completed",
+                {"planning_agents": planning_agents},
+            )
+            return plan_text
+
+        if orchestrator == "langgraph":
+            planning_state = plan_with_langgraph(
+                goal=goal,
+                worktree_path=worktree_path,
+                workers=worker_names,
+                planning_agents=planning_agents,
+                run_planner=run_planner_record,
+                run_synthesis=run_master_synthesis,
+            )
             plan = str(planning_state["plan"])
             task_plan = planning_state["task_plan"]
+            planner_records = planning_state.get("planner_outputs", []) if isinstance(planning_state, dict) else []
         else:
             if orchestrator != "builtin":
                 print(f"Configured orchestrator '{orchestrator}' is not active yet; using builtin flow.")
-            plan = _run_agent(
-                config,
-                "master",
-                master_plan_prompt(worktree_path, goal, _capability_hint(config, "master")),
-                worktree_path,
-                outputs_dir,
-            )
+            planner_records = []
+            # Builtin fallback still uses multi-agent planning (best-effort parallel).
+            with ThreadPoolExecutor(max_workers=max(1, len(planning_agents))) as pool:
+                futures = {pool.submit(run_planner_record, name): name for name in planning_agents}
+                for future in as_completed(futures):
+                    planner_records.append(future.result())
+
+            plan = run_master_synthesis(planner_records)
             task_plan = build_task_plan(goal, plan, worker_names)
+
+        # Attach planning metadata for UI/API consumers (backward compatible additions).
+        task_plan["planning_mode"] = "multi-agent"
+        task_plan["planning_agents"] = planning_agents
+        task_plan["planner_outputs"] = [
+            {
+                "agent": str(r.get("agent") or ""),
+                "status": str(r.get("status") or ""),
+                "artifact": str(r.get("artifact") or ""),
+                "started_at": r.get("started_at"),
+                "completed_at": r.get("completed_at"),
+                "failed_at": r.get("failed_at"),
+                "error": (str(r.get("error") or "")[:2000] if r.get("status") == "failed" else ""),
+                "output_excerpt": (str(r.get("output") or "")[:4000] if r.get("status") == "completed" else ""),
+            }
+            for r in (planner_records or [])
+        ]
 
         (run_dir / "plan.md").write_text(plan, encoding="utf-8")
         write_task_plan(run_dir / "task-plan.json", task_plan)
@@ -637,6 +768,40 @@ def _worker_names(metadata: Dict) -> List[str]:
     if isinstance(raw, list):
         return [str(item) for item in raw if str(item).strip()]
     return DEFAULT_WORKERS
+
+
+def _planning_agents(config: Dict, metadata: Dict) -> List[str]:
+    """
+    Resolve planning agents list.
+
+    Priority:
+    1) run metadata.planning_agents
+    2) config settings.planning_agents
+    3) DEFAULT_PLANNERS
+    """
+
+    def normalize(value: Any) -> List[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            items = [str(x).strip() for x in value]
+            return [x for x in items if x]
+        text = str(value).strip()
+        if not text:
+            return []
+        parts = [p.strip() for p in text.split(",")]
+        return [p for p in parts if p]
+
+    raw = metadata.get("planning_agents")
+    if raw is None:
+        settings = config.get("settings", {}) or {}
+        raw = settings.get("planning_agents")
+
+    names = normalize(raw) or list(DEFAULT_PLANNERS)
+
+    # Master is the synthesizer, not a planner.
+    filtered = [n for n in names if n not in ("master", "reviewer")]
+    return filtered or list(DEFAULT_PLANNERS)
 
 
 def _ensure_not_cancelled(run_id: str, cancel_check: Optional[Callable[[], bool]]) -> None:

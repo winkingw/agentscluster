@@ -45,13 +45,49 @@ class FakeRunner(AgentRunner):
 
     def _produce_output(self, prompt: str, cwd: Path) -> str:
         name = (self.config.name or "").lower()
-        # For master planning prompts.
-        if name == "master" and ("master plan" in prompt.lower() or "planning" in prompt.lower() or "plan" in prompt.lower()):
+        lower = prompt.lower()
+
+        # Master summary: produce a short report.
+        if name == "master" and ("final report" in lower or "final summary" in lower):
+            return (
+                "## Summary (dry-e2e)\n\n"
+                "- 已完成：生成计划、执行 worker、review approve、生成 summary。\n"
+                "- 产物：plan.md / task-plan.json / diff.patch / status.txt / summary.md\n"
+            )
+
+        # Master planning / synthesis prompts.
+        if name == "master" and (
+            "planner outputs" in prompt
+            or "synthesize" in lower
+            or "planning stage" in lower
+            or "master plan" in lower
+        ):
             return (
                 "# Plan (dry-e2e)\n\n"
-                "1. 修改一个文件以制造可见 diff。\n"
-                "2. 记录改动与验证点。\n"
-                "3. 由 reviewer 给出 APPROVE/REQUEST_CHANGES。\n"
+                "## Task Breakdown\n"
+                "1. 变更一个文件，产出可见 diff。\n"
+                "2. 记录改动与验证点。\n\n"
+                "## Worker Instructions\n"
+                "- architect/coder/tester: 各自完成一部分变更并记录结果。\n\n"
+                "## Verification Plan\n"
+                "- git status / git diff\n\n"
+                "## Risks\n"
+                "- dry-e2e\n"
+            )
+
+        # Planners: return structured planning output, but do NOT touch files.
+        if name in ("architect", "coder", "tester") and ("planning agent" in lower or "planning stage" in lower):
+            return (
+                "## 对需求的理解\n"
+                f"- planner={name}\n\n"
+                "## 推荐方案\n"
+                "- dry-e2e planner proposal\n\n"
+                "## 需要修改/新增的文件\n"
+                "- README.md\n\n"
+                "## 风险与依赖\n"
+                "- none (dry-e2e)\n\n"
+                "## 验收标准\n"
+                "- 能看到 diff.patch 里出现 touched by 标记\n"
             )
 
         # Workers: touch file(s) to generate a diff.
@@ -62,14 +98,6 @@ class FakeRunner(AgentRunner):
         # Reviewer: always approve for dry E2E.
         if name == "reviewer":
             return "DECISION: APPROVE\n\nnotes: dry-e2e reviewer approved."
-
-        # Master summary: produce a short report.
-        if name == "master":
-            return (
-                "## Summary (dry-e2e)\n\n"
-                "- 已完成：生成计划、执行 worker、review approve、生成 summary。\n"
-                "- 产物：plan.md / task-plan.json / diff.patch / status.txt / summary.md\n"
-            )
 
         # Default.
         return f"{self.config.name}: ok (dry-e2e)"
@@ -86,4 +114,3 @@ class FakeRunner(AgentRunner):
             marker = f"\n\n# touched by {agent_name}\n"
             if marker.strip() not in existing:
                 target.write_text(existing + marker, encoding="utf-8")
-
