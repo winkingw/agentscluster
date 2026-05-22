@@ -152,6 +152,20 @@ agentsCluster apply <run_id> --mode merge
 agentsCluster apply <run_id> --mode discard
 ```
 
+## E2E 验证
+
+`dry` 模式不会调用真实模型，会用内置 fake runner 跑完整链路（推荐先跑它确认环境/工作流都通）。  
+`real` 模式会调用你在 `config/agents.yaml` 里配置的真实 runner/model（会产生模型费用）。
+
+```powershell
+# 可选：让临时仓库的 git 提交使用你的身份信息
+$env:AGENTSCLUSTER_E2E_EMAIL="2428593329@qq.com"
+$env:AGENTSCLUSTER_E2E_NAME="winkingw"
+
+agentsCluster e2e --mode dry --apply patch
+agentsCluster e2e --mode real --apply patch --cleanup none
+```
+
 ## 队列与 worktree 规则
 
 - 每个 run 都会创建独立 `git worktree`

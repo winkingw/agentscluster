@@ -33,6 +33,7 @@ from agents_cluster.core.paths import (
 from agents_cluster.orchestrator.controller import apply_run, execute_run, plan_run, run_task
 from agents_cluster.orchestrator.agent_test import test_agent
 from agents_cluster.api.server import serve
+from agents_cluster.e2e import run_e2e
 
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -80,6 +81,13 @@ def build_parser() -> argparse.ArgumentParser:
     tools_uninstall = tools_sub.add_parser("uninstall", help="Uninstall one tool CLI from vendor/tools/<name>.")
     tools_uninstall.add_argument("name", choices=["aider"])
     tools_uninstall.set_defaults(func=cmd_tools_uninstall)
+
+    e2e_cmd = sub.add_parser("e2e", help="Run an end-to-end validation (dry first, then real).")
+    e2e_cmd.add_argument("--mode", choices=["dry", "real"], default="dry")
+    e2e_cmd.add_argument("--apply", choices=["none", "diff", "patch", "merge", "discard"], default="patch")
+    e2e_cmd.add_argument("--cleanup", choices=["none", "discard"], default="discard")
+    e2e_cmd.add_argument("--keep-repo", action="store_true", help="Keep a snapshot of the temp repo under runs/<run_id>.")
+    e2e_cmd.set_defaults(func=cmd_e2e)
 
     serve_cmd = sub.add_parser("serve", help="Start the local JSON API server for frontend use.")
     serve_cmd.add_argument("--host", default="127.0.0.1")
@@ -222,6 +230,14 @@ def cmd_tools_uninstall(args: argparse.Namespace) -> None:
     print(f"Uninstalled: {status.name}")
     if status.command_path or status.local_command_path:
         print(f"Remaining: {status.command_path or status.local_command_path}")
+
+
+def cmd_e2e(args: argparse.Namespace) -> None:
+    result = run_e2e(mode=args.mode, apply=args.apply, cleanup=args.cleanup, keep_repo=bool(args.keep_repo))
+    print("agentsCluster e2e")
+    for key in ("ok", "mode", "apply", "cleanup", "run_id", "repo", "snapshot"):
+        if key in result:
+            print(f"{key}: {result[key]}")
 
 
 def cmd_serve(args: argparse.Namespace) -> None:

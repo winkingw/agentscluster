@@ -17,6 +17,7 @@ try {
     & conda run -n $EnvName python tests\\smoke.py
     & conda run -n $EnvName python tests\\langgraph_smoke.py
     & conda run -n $EnvName python tests\\integration_smoke.py
+    & conda run -n $EnvName python tests\\e2e_dry.py
     & conda run -n $EnvName python tests\\api_smoke.py
 
     Write-Host ""

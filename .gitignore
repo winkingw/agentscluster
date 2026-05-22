@@ -17,6 +17,7 @@ agentsCluster.db
 __pycache__/
 *.pyc
 *.egg-info/
+.idea/
 runs/*
 !runs/.gitkeep
 worktrees/*

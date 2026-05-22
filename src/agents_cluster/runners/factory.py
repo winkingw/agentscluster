@@ -11,6 +11,7 @@ from .aider import AiderRunner
 from .claude import ClaudeRunner
 from .codex import CodexRunner
 from .direct_llm import DirectLLMRunner
+from .fake import FakeRunner
 from .openhands import OpenHandsRunner
 
 
@@ -26,6 +27,8 @@ def create_runner(config: AgentConfig, env: Optional[Dict[str, str]] = None) -> 
         return ClaudeRunner(config, resolved_env)
     if runner in ("direct_llm", "llm", "api"):
         return DirectLLMRunner(config, resolved_env)
+    if runner in ("fake", "mock"):
+        return FakeRunner(config, resolved_env)
     if runner == "aider":
         return AiderRunner(config, resolved_env)
     if runner in ("openhands", "openhands_sdk", "openhands-sdk"):
