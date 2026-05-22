@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,7 +12,7 @@ from uuid import uuid4
 from agents_cluster.core import db
 from agents_cluster.core.env import read_dotenv, write_dotenv
 from agents_cluster.core.config import AgentConfig, add_project, load_config, remove_project, save_config
-from agents_cluster.core.paths import CONFIG_PATH, RUNS_DIR
+from agents_cluster.core.paths import CONFIG_EXAMPLE_PATH, CONFIG_PATH, RUNS_DIR
 from agents_cluster.runners.claude import ClaudeRunner
 from agents_cluster.runners.codex import CodexRunner
 from agents_cluster.workspace import git_ops
@@ -85,6 +86,11 @@ def assert_codex_runner_uses_last_message(tmp: Path) -> None:
 def main() -> None:
     db.init_db()
     original_config = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else None
+    created_config = False
+    if original_config is None and CONFIG_EXAMPLE_PATH.exists():
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(CONFIG_EXAMPLE_PATH, CONFIG_PATH)
+        created_config = True
     with tempfile.TemporaryDirectory() as tmp:
         try:
             repo = Path(tmp) / "repo"
@@ -177,6 +183,8 @@ def main() -> None:
         finally:
             if original_config is not None:
                 CONFIG_PATH.write_text(original_config, encoding="utf-8")
+            elif created_config and CONFIG_PATH.exists():
+                CONFIG_PATH.unlink()
 
     print("smoke ok")
 

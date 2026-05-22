@@ -2,10 +2,11 @@
 # 安装位置：独立 conda 环境 agentsCluster。
 # 安装脚本：scripts/install_worker_deps.ps1。
 
+# OpenHands（纯可选扩展，非核心依赖）
 # 注意：OpenHands 官方包（openhands / openhands-sdk）目前要求 Python >= 3.12。
-# 如果你希望接入 OpenHands CLI，建议使用 uv 单独安装（不放进 conda env）：
+# 如果你希望接入 OpenHands CLI，请单独安装（不要放进主 conda env）：
 #   uv tool install openhands --python 3.12
-# 然后在 agents.yaml 里启用 openhands runner（走 CLI subprocess）。
+# 然后在 agents.yaml 里启用 openhands runner（走 CLI subprocess）。不装也不影响主流程。
 
 # 注意：SWE-agent 在 Windows 上更推荐用 Docker 跑（官方也建议 Mac/Linux）。
 # 如果你希望接入 swe-agent CLI，请优先走 Docker/WSL；本 conda env 不默认安装。

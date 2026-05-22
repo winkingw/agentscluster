@@ -37,7 +37,7 @@ _KNOWN_TOOLS: Dict[str, Dict[str, str]] = {
     # on Windows due to Python version / Docker constraints.
     "openhands": {
         "command": "openhands",
-        "install_hint": "Install OpenHands CLI separately (Python 3.12+). See: agentsCluster integrations list",
+        "install_hint": "Optional: install OpenHands CLI separately (Python 3.12+). Not required for core flow.",
     },
     "swe-agent": {
         "command": "sweagent",
@@ -148,4 +148,3 @@ def _venv_python(venv_dir: Path) -> str:
     if not python.exists():
         raise RuntimeError(f"venv python not found: {python}")
     return str(python)
-

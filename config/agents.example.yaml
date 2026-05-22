@@ -110,6 +110,7 @@ agents:
       extra_args: []
 
   openhands_coder:
+    # OpenHands 是纯可选扩展（非核心依赖）。默认不启用，也不要求安装。
     runner: openhands
     model: deepseek-v4-flash
     role: coder

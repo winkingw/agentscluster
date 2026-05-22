@@ -1255,7 +1255,10 @@ function App() {
               <section className="panel">
                 <div className="panel-header">
                   <h2>Integrations</h2>
-                  <span className="panel-hint">可插拔执行器 / worker</span>
+                  <span className="panel-hint">可插拔执行器 / worker（OpenHands 非必需）</span>
+                </div>
+                <div className="panel-hint" style={{ marginTop: 6 }}>
+                  主流程只依赖 Codex / Claude / DeepSeek / LangGraph / OpenAI Agents SDK；OpenHands 仅用于对比和扩展。
                 </div>
                 <div className="item-list">
                   {integrations.length ? (

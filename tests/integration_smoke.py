@@ -13,6 +13,7 @@ def main() -> None:
     assert {"langgraph", "openai-agents", "openhands", "aider", "swe-agent"}.issubset(names)
     status_map = integration_status_map()
     assert status_map["langgraph"].install_hint
+    assert "可选" in status_map["openhands"].use_for or "非必需" in status_map["openhands"].use_for
 
     aider = create_runner(
         AgentConfig(

@@ -82,7 +82,7 @@
 - 用更标准的 handoff / tool / tracing 协议替换部分手写 prompt 协议
 - 继续保留 `agentsCluster` 的 worktree / apply / queue / API 外壳
 
-### 3. OpenHands / aider 作为可选 worker
+### 3. OpenHands / aider 作为可选 worker（非必需）
 
 目标：
 
@@ -105,7 +105,8 @@
 继续沿着下面的架构演进：
 
 - `agentsCluster` 负责工程控制面
-- `Codex / Claude / direct_llm / OpenHands / aider` 负责执行面
-- `LangGraph / OpenAI Agents SDK` 负责未来的编排增强
+- `Codex / Claude / direct_llm` 负责主执行面（核心）
+- `OpenHands / aider` 仅作为可选扩展（对比与补强，不是必要条件）
+- `LangGraph / OpenAI Agents SDK` 负责编排与协议增强
 
 这条路线最符合你要的“像 cc cli / codex cli 那样交流，但背后是多 agent 协作”的目标。

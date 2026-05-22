@@ -225,9 +225,14 @@ http://127.0.0.1:8765/
 
 当前项目保留了可扩展接口，后续可逐步接入：
 
+主流程依赖（核心）：
+
 - LangGraph
 - OpenAI Agents SDK
-- OpenHands
+
+可选扩展（非必需，后装）：
+
+- OpenHands（仅用于对比和扩展，不属于核心依赖）
 - aider
 - SWE-agent
 
@@ -237,12 +242,16 @@ http://127.0.0.1:8765/
 agentsCluster integrations list
 agentsCluster integrations spike langgraph
 agentsCluster integrations spike openai-agents
-agentsCluster integrations spike openhands
+
+# OpenHands 仅用于对比/扩展，非必需；需要时再运行：
+# agentsCluster integrations spike openhands
 ```
 
 选型说明见：
 
 [`docs/architecture-comparison.md`](D:/programs/agentsCluster/docs/architecture-comparison.md)
+
+说明：OpenHands 在本项目中只作为“对比与扩展”候选 worker，默认不启用、也不要求安装；缺失不会影响 agentsCluster 主流程。
 
 ## 自检与回归
 

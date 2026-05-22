@@ -44,7 +44,9 @@ agentsCluster tools install aider
 
 OpenHands 和 SWE-agent 依赖较重，先通过 `agentsCluster integrations list` 检测和记录；后续按验证结果决定是加入工具环境，还是克隆到 `vendor/repos`。
 
-如果需要安装 worker 相关依赖（OpenHands / SWE-agent / aider），执行：
+说明：OpenHands 在本项目中是纯可选扩展（非核心依赖），默认不需要安装。
+
+如果需要安装可选 worker 相关依赖（例如 SWE-agent / aider），执行：
 
 ```powershell
 cd D:\programs\agentsCluster

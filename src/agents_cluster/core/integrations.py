@@ -34,8 +34,8 @@ OPTIONAL_INTEGRATIONS: Dict[str, Dict[str, str]] = {
 OPTIONAL_CLIS: Dict[str, Dict[str, str]] = {
     "openhands": {
         "command": "openhands",
-        "install": "uv tool install openhands --python 3.12",
-        "use_for": "用于把 OpenHands 作为 worker runner 接入（建议通过 CLI subprocess 方式集成）。",
+        "install": "(optional) uv tool install openhands --python 3.12",
+        "use_for": "纯可选扩展：用于对比/扩展重型 worker。不是 agentsCluster 主流程的必要条件。",
     },
     "aider": {
         "command": "aider",
@@ -172,7 +172,7 @@ def _run_openai_agents_spike(goal: str) -> str:
 
 
 def _run_openhands_spike(goal: str) -> str:
-    return _run_cli_spike("openhands", goal, "uv tool install openhands --python 3.12")
+    return _run_cli_spike("openhands", goal, "uv tool install openhands --python 3.12 (optional)")
 
 
 def _run_cli_spike(command_name: str, goal: str, hint: str) -> str:

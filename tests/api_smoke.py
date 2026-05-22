@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -14,7 +15,7 @@ from uuid import uuid4
 from agents_cluster.api.server import create_server
 from agents_cluster.api import server as api_server
 from agents_cluster.core import db
-from agents_cluster.core.paths import CONFIG_PATH, RUNS_DIR
+from agents_cluster.core.paths import CONFIG_EXAMPLE_PATH, CONFIG_PATH, RUNS_DIR
 from agents_cluster.core.time import now_iso
 from agents_cluster.orchestrator import controller
 from agents_cluster.workspace import git_ops
@@ -112,6 +113,11 @@ def read_sse_until(url: str, target_event: str = "run-event", timeout: float = 1
 def main() -> None:
     db.init_db()
     original_config = CONFIG_PATH.read_text(encoding="utf-8") if CONFIG_PATH.exists() else None
+    created_config = False
+    if original_config is None and CONFIG_EXAMPLE_PATH.exists():
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(CONFIG_EXAMPLE_PATH, CONFIG_PATH)
+        created_config = True
     original_env_path = api_server.ENV_PATH
     original_run_agent = controller._run_agent
 
@@ -395,6 +401,8 @@ def main() -> None:
         api_server.ENV_PATH = original_env_path
         if original_config is not None:
             CONFIG_PATH.write_text(original_config, encoding="utf-8")
+        elif created_config and CONFIG_PATH.exists():
+            CONFIG_PATH.unlink()
 
     print("api smoke ok")
 

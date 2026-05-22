@@ -25,6 +25,13 @@ class Check:
 def collect_doctor_checks() -> List[Check]:
     load_dotenv(ENV_PATH)
     checks: List[Check] = []
+    checks.append(
+        Check(
+            "core requirements",
+            True,
+            "Core: Codex / Claude / DeepSeek + LangGraph + OpenAI Agents SDK. OpenHands is optional (non-core).",
+        )
+    )
     checks.extend(_path_checks())
     checks.extend(_tool_checks())
     checks.extend(_github_checks())
