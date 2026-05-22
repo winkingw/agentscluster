@@ -32,7 +32,8 @@
 核心思路是：
 
 - `agentsCluster` 自己负责工程边界和运行记录
-- `Codex / Claude / direct_llm / 未来的 OpenHands / aider` 只负责执行 agent 本身
+- `Codex / Claude / direct_llm` 负责主执行面（核心）
+- `OpenHands / aider` 仅作为可选扩展（需要时再接入）
 
 这样拆分有几个好处：
 
@@ -47,7 +48,8 @@
 - 保留 `agentsCluster` 作为本地总控壳
 - 默认用 `Codex CLI` 做 `master / reviewer`
 - 默认用 `Claude Code` 做 `architect / coder / tester`
-- 按需接入 `LangGraph`、`OpenAI Agents SDK`、`OpenHands`、`aider`
+- 按需接入 `LangGraph`、`OpenAI Agents SDK`
+- 需要对比/扩展时再接入 `OpenHands`、`aider`
 
 这比直接押注某一个单一框架稳得多，也更符合你一开始的要求：可切模型、可控工作区、可审核、可恢复、可接前端。
 
